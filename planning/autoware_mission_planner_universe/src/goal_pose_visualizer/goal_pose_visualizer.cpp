@@ -16,6 +16,7 @@
 
 namespace autoware::mission_planner_universe
 {
+
 GoalPoseVisualizer::GoalPoseVisualizer(const rclcpp::NodeOptions & node_options)
 : Node("goal_pose_visualizer", node_options)
 {

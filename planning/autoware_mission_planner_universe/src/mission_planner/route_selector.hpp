@@ -62,6 +62,7 @@ private:
   rclcpp::Clock::SharedPtr clock_;
 };
 
+// 负责管理主路径（Main Route）和应急路径规划模块（MRM Route）的切换和恢复。
 class RouteSelector : public rclcpp::Node
 {
 public:

@@ -22,6 +22,9 @@
 
 namespace autoware::mission_planner_universe
 {
+
+// 这个主要作用是负责可视化目标位置。它订阅路由消息并发布目标位置的可视化信息。
+// 主要和与 mission_planner.cpp 和 route_selector.cpp 交互，接收路由信息并发布目标位置。
 class GoalPoseVisualizer : public rclcpp::Node
 {
 public:

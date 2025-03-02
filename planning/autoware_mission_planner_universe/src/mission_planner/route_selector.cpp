@@ -23,19 +23,25 @@
 namespace autoware::mission_planner_universe::uuid
 {
 
+// 生成一个随机的 16 字节 UUID
 std::array<uint8_t, 16> generate_random_id()
 {
+  // 使用随机设备初始化随机数引擎
   static std::independent_bits_engine<std::mt19937, 8, uint8_t> engine(std::random_device{}());
   std::array<uint8_t, 16> id;
+  // 生成 16 字节的随机数作为 UUID
   std::generate(id.begin(), id.end(), std::ref(engine));
   return id;
 }
 
+// 如果 UUID 为空，则生成一个随机 UUID
 UUID generate_if_empty(const UUID & uuid)
 {
+  // 定义一个全零的 UUID
   constexpr std::array<uint8_t, 16> zero_uuid = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
   UUID result;
+  // 如果输入的 UUID 是全零，则生成一个随机 UUID，否则使用输入的 UUID
   result.uuid = (uuid.uuid == zero_uuid) ? generate_random_id() : uuid.uuid;
   return result;
 }
@@ -45,27 +51,32 @@ UUID generate_if_empty(const UUID & uuid)
 namespace autoware::mission_planner_universe
 {
 
+// RouteInterface 构造函数，初始化时钟和状态
 RouteInterface::RouteInterface(rclcpp::Clock::SharedPtr clock)
 {
   clock_ = clock;
   state_.state = RouteState::UNKNOWN;
 }
 
+// 获取当前路径状态
 RouteState::_state_type RouteInterface::get_state() const
 {
   return state_.state;
 }
 
+// 获取当前路径
 std::optional<LaneletRoute> RouteInterface::get_route() const
 {
   return route_;
 }
 
+// 清除当前路径
 void RouteInterface::change_route()
 {
   route_ = std::nullopt;
 }
 
+// 改变路径状态，并发布状态
 void RouteInterface::change_state(RouteState::_state_type state)
 {
   state_.stamp = clock_->now();
@@ -73,18 +84,21 @@ void RouteInterface::change_state(RouteState::_state_type state)
   pub_state_->publish(state_);
 }
 
+// 更新路径状态，并发布状态
 void RouteInterface::update_state(const RouteState & state)
 {
   state_ = state;
   pub_state_->publish(state_);
 }
 
+// 更新路径，并发布路径
 void RouteInterface::update_route(const LaneletRoute & route)
 {
   route_ = route;
   pub_route_->publish(route);
 }
 
+// RouteSelector 构造函数，初始化主路径和最小风险路径接口
 RouteSelector::RouteSelector(const rclcpp::NodeOptions & options)
 : Node("route_selector", options), main_(get_clock()), mrm_(get_clock())
 {
@@ -93,6 +107,7 @@ RouteSelector::RouteSelector(const rclcpp::NodeOptions & options)
   const auto service_qos = rmw_qos_profile_services_default;
   const auto durable_qos = rclcpp::QoS(1).transient_local();
 
+  // 初始化主路径接口
   // Init main route interface.
   main_.srv_clear_route = create_service<ClearRoute>(
     "~/main/clear_route",
@@ -106,6 +121,7 @@ RouteSelector::RouteSelector(const rclcpp::NodeOptions & options)
   main_.pub_state_ = create_publisher<RouteState>("~/main/state", durable_qos);
   main_.pub_route_ = create_publisher<LaneletRoute>("~/main/route", durable_qos);
 
+  // 初始化最小风险路径接口
   // Init mrm route interface.
   mrm_.srv_clear_route = create_service<ClearRoute>(
     "~/mrm/clear_route", service_utils::handle_exception(&RouteSelector::on_clear_route_mrm, this));
@@ -130,6 +146,7 @@ RouteSelector::RouteSelector(const rclcpp::NodeOptions & options)
   sub_route_ = create_subscription<LaneletRoute>(
     "~/planner/route", durable_qos, std::bind(&RouteSelector::on_route, this, _1));
 
+  // 设置初始状态
   // Set initial state.
   main_.change_state(RouteState::INITIALIZING);
   mrm_.change_state(RouteState::INITIALIZING);
@@ -151,29 +168,37 @@ void RouteSelector::publish_processing_time(
   pub_processing_time_->publish(processing_time_msg);
 }
 
+// 路径状态回调函数
 void RouteSelector::on_state(const RouteState::ConstSharedPtr msg)
 {
+  // 如果路径规划器状态为 UNSET 且未初始化，则初始化主路径和最小风险路径状态
   if (msg->state == RouteState::UNSET && !initialized_) {
     main_.change_state(RouteState::UNSET);
     mrm_.change_state(RouteState::UNSET);
     initialized_ = true;
   }
 
+  // 根据是否处于最小风险模式，更新主路径或最小风险路径状态
   (mrm_operating_ ? mrm_ : main_).update_state(*msg);
 }
 
+// 路径回调函数
 void RouteSelector::on_route(const LaneletRoute::ConstSharedPtr msg)
 {
+  // 根据是否处于最小风险模式，更新主路径或最小风险路径
   (mrm_operating_ ? mrm_ : main_).update_route(*msg);
 }
 
+// 清除主路径服务回调函数
 void RouteSelector::on_clear_route_main(
   ClearRoute::Request::SharedPtr req, ClearRoute::Response::SharedPtr res)
 {
+  // 保存请求并清除旧路径，以便从最小风险模式恢复
   // Save the request and clear old route to resume from MRM.
   main_request_ = std::monostate{};
   main_.change_route();
 
+  // 如果处于最小风险模式，仅改变状态
   // During MRM, only change the state.
   if (mrm_operating_) {
     main_.change_state(RouteState::UNSET);
@@ -200,18 +225,22 @@ void RouteSelector::on_set_waypoint_route_main(
     return;
   }
 
+  // 如果未处于最小风险模式，则转发请求
   // Forward the request if not in MRM.
   res->status = service_utils::sync_call(cli_set_waypoint_route_, req);
 }
 
+// 设置 Waypoint 主路径服务回调函数
 void RouteSelector::on_set_lanelet_route_main(
   SetLaneletRoute::Request::SharedPtr req, SetLaneletRoute::Response::SharedPtr res)
 {
+  // 保存请求并清除旧路径，以便从最小风险模式恢复
   // Save the request and clear old route to resume from MRM.
   req->uuid = uuid::generate_if_empty(req->uuid);
   main_request_ = req;
   main_.change_route();
 
+  // 如果处于最小风险模式，仅改变状态
   // During MRM, only change the state.
   if (mrm_operating_) {
     main_.change_state(RouteState::INTERRUPTED);
@@ -219,51 +248,65 @@ void RouteSelector::on_set_lanelet_route_main(
     return;
   }
 
+  // 如果未处于最小风险模式，则转发请求
   // Forward the request if not in MRM.
   res->status = service_utils::sync_call(cli_set_lanelet_route_, req);
 }
 
+// 清除最小风险路径服务回调函数
 void RouteSelector::on_clear_route_mrm(
   ClearRoute::Request::SharedPtr req, ClearRoute::Response::SharedPtr res)
 {
+  // 尝试恢复主路径
   res->status = resume_main_route(req);
 
+  // 如果恢复成功，则退出最小风险模式
   if (res->status.success) {
     mrm_operating_ = false;
     mrm_.change_state(RouteState::UNSET);
   }
 }
 
+// 设置 Waypoint 最小风险路径服务回调函数
 void RouteSelector::on_set_waypoint_route_mrm(
   SetWaypointRoute::Request::SharedPtr req, SetWaypointRoute::Response::SharedPtr res)
 {
+  // 如果 UUID 为空，则生成一个随机 UUID
   req->uuid = uuid::generate_if_empty(req->uuid);
+  // 转发请求
   res->status = service_utils::sync_call(cli_set_waypoint_route_, req);
 
+  // 如果请求成功，则进入最小风险模式
   if (res->status.success) {
     mrm_operating_ = true;
     if (main_.get_state() != RouteState::UNSET) {
-      main_.change_state(RouteState::INTERRUPTED);
+      main_.change_state(RouteState::INTERRUPTED);  // 中断主路径
     }
   }
 }
 
+// 设置 Lanelet 最小风险路径服务回调函数
 void RouteSelector::on_set_lanelet_route_mrm(
   SetLaneletRoute::Request::SharedPtr req, SetLaneletRoute::Response::SharedPtr res)
 {
+  // 如果 UUID 为空，则生成一个随机 UUID
   req->uuid = uuid::generate_if_empty(req->uuid);
+  // 转发请求
   res->status = service_utils::sync_call(cli_set_lanelet_route_, req);
 
+  // 如果请求成功，则进入最小风险模式
   if (res->status.success) {
     mrm_operating_ = true;
     if (main_.get_state() != RouteState::UNSET) {
-      main_.change_state(RouteState::INTERRUPTED);
+      main_.change_state(RouteState::INTERRUPTED);  // 中断主路径
     }
   }
 }
 
+// 恢复主路径
 ResponseStatus RouteSelector::resume_main_route(ClearRoute::Request::SharedPtr req)
 {
+  // 创建一个 Lanelet 路径请求
   const auto create_lanelet_request = [](const LaneletRoute & route) {
     // NOTE: The start_pose.is not included in the request.
     const auto r = std::make_shared<SetLaneletRoute::Request>();
@@ -275,6 +318,7 @@ ResponseStatus RouteSelector::resume_main_route(ClearRoute::Request::SharedPtr r
     return r;
   };
 
+  // 创建一个 Waypoint 路径请求
   const auto create_goal_request = [](const auto & request) {
     const auto r = std::make_shared<SetWaypointRoute::Request>();
     r->header = request->header;
@@ -284,11 +328,13 @@ ResponseStatus RouteSelector::resume_main_route(ClearRoute::Request::SharedPtr r
     return r;
   };
 
+  // 如果没有主路径请求，则清除路径
   // Clear the route if there is no request for the main route.
   if (std::holds_alternative<std::monostate>(main_request_)) {
     return service_utils::sync_call(cli_clear_route_, req);
   }
 
+  // 如果有主路径请求，则尝试恢复主路径
   // Attempt to resume the main route if there is a planned route.
   if (const auto route = main_.get_route()) {
     const auto r = create_lanelet_request(route.value());
@@ -296,6 +342,7 @@ ResponseStatus RouteSelector::resume_main_route(ClearRoute::Request::SharedPtr r
     if (status.success) return status;
   }
 
+  // 如果恢复失败，则使用目标点重新规划主路径
   // If resuming fails, replan main route using the goal.
   // NOTE: Clear the waypoints to avoid returning. Remove this once resuming is supported.
   if (const auto request = std::get_if<WaypointRequest>(&main_request_)) {

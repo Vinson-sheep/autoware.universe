@@ -35,63 +35,91 @@
 namespace autoware::mission_planner_universe
 {
 
+
+// 实现路径规划的主逻辑，负责生成和管理车辆的行驶路径。
+
+// 构造函数，初始化节点
 MissionPlanner::MissionPlanner(const rclcpp::NodeOptions & options)
 : Node("mission_planner", options),
-  arrival_checker_(this),
+  arrival_checker_(this), // 初始化到达检查器
   plugin_loader_(
-    "autoware_mission_planner_universe", "autoware::mission_planner_universe::PlannerPlugin"),
-  tf_buffer_(get_clock()),
-  tf_listener_(tf_buffer_),
-  odometry_(nullptr),
-  map_ptr_(nullptr)
+    "autoware_mission_planner_universe", "autoware::mission_planner_universe::PlannerPlugin"), // // 插件加载器
+  tf_buffer_(get_clock()), // TF 缓冲区
+  tf_listener_(tf_buffer_), // // TF 监听器
+  odometry_(nullptr), // 初始化里程计为空
+  map_ptr_(nullptr) // 初始化地图指针为空
 {
   using std::placeholders::_1;
   using std::placeholders::_2;
 
+  // 从参数服务器获取地图帧名称
   map_frame_ = declare_parameter<std::string>("map_frame");
+  // 获取重新规划路径的时间阈值
   reroute_time_threshold_ = declare_parameter<double>("reroute_time_threshold");
+  // 获取重新规划路径的最小长度
   minimum_reroute_length_ = declare_parameter<double>("minimum_reroute_length");
+  // ?
   allow_reroute_in_autonomous_mode_ = declare_parameter<bool>("allow_reroute_in_autonomous_mode");
 
+  // 创建默认路径规划器插件实例
   planner_ = plugin_loader_.createSharedInstance(
     "autoware::mission_planner_universe::lanelet2::DefaultPlanner");
-  planner_->initialize(this);
+  planner_->initialize(this); // 初始化路径规划器
 
+  // QoS（Quality of Service，服务质量）
+  // 设置 QoS 为持久化
   const auto durable_qos = rclcpp::QoS(1).transient_local();
+
+  // 订阅里程计信息
   sub_odometry_ = create_subscription<Odometry>(
     "~/input/odometry", rclcpp::QoS(1), std::bind(&MissionPlanner::on_odometry, this, _1));
+  // 订阅操作模式状态
   sub_operation_mode_state_ = create_subscription<OperationModeState>(
     "~/input/operation_mode_state", rclcpp::QoS(1),
     std::bind(&MissionPlanner::on_operation_mode_state, this, _1));
+  // 订阅矢量地图
   sub_vector_map_ = create_subscription<LaneletMapBin>(
     "~/input/vector_map", durable_qos, std::bind(&MissionPlanner::on_map, this, _1));
+  // 发布路径标记
   pub_marker_ = create_publisher<MarkerArray>("~/debug/route_marker", durable_qos);
 
+  // 注意：路由接口的回调组应该是互斥的
   // NOTE: The route interface should be mutually exclusive by callback group.
+
+  // 订阅修改后的目标点
   sub_modified_goal_ = create_subscription<PoseWithUuidStamped>(
     "~/input/modified_goal", durable_qos, std::bind(&MissionPlanner::on_modified_goal, this, _1));
+  // 创建清除路径服务
   srv_clear_route = create_service<ClearRoute>(
     "~/clear_route", service_utils::handle_exception(&MissionPlanner::on_clear_route, this));
+  // 创建设置 Lanelet 路径服务
   srv_set_lanelet_route = create_service<SetLaneletRoute>(
     "~/set_lanelet_route",
     service_utils::handle_exception(&MissionPlanner::on_set_lanelet_route, this));
+  // 创建设置 Waypoint 路径服务
   srv_set_waypoint_route = create_service<SetWaypointRoute>(
     "~/set_waypoint_route",
     service_utils::handle_exception(&MissionPlanner::on_set_waypoint_route, this));
+
+  // 发布路径
   pub_route_ = create_publisher<LaneletRoute>("~/route", durable_qos);
+  // 发布路径状态
   pub_state_ = create_publisher<RouteState>("~/state", durable_qos);
 
   // Route state will be published when the node gets ready for route api after initialization,
   // otherwise the mission planner rejects the request for the API.
+  // 节点初始化后，当准备好路由 API 时，将发布路由状态
   const auto period = rclcpp::Rate(10).period();
   data_check_timer_ = create_wall_timer(period, [this] { check_initialization(); });
   is_mission_planner_ready_ = false;
 
+  // 配置日志记录器
   logger_configure_ = std::make_unique<autoware_utils::LoggerLevelConfigure>(this);
   pub_processing_time_ = this->create_publisher<autoware_internal_debug_msgs::msg::Float64Stamped>(
     "~/debug/processing_time_ms", 1);
 }
 
+// 发布处理时间
 void MissionPlanner::publish_processing_time(
   autoware_utils::StopWatch<std::chrono::milliseconds> stop_watch)
 {
@@ -101,6 +129,7 @@ void MissionPlanner::publish_processing_time(
   pub_processing_time_->publish(processing_time_msg);
 }
 
+// 发布位姿日志
 void MissionPlanner::publish_pose_log(const Pose & pose, const std::string & pose_type)
 {
   const auto & p = pose.position;
@@ -112,50 +141,60 @@ void MissionPlanner::publish_pose_log(const Pose & pose, const std::string & pos
     quaternion.x, quaternion.y, quaternion.z, quaternion.w);
 }
 
+// 检查初始化状态
 void MissionPlanner::check_initialization()
 {
   auto logger = get_logger();
   auto clock = *get_clock();
 
+  // 如果路径规划器未准备好，等待 Lanelet 地图
   if (!planner_->ready()) {
     RCLCPP_INFO_THROTTLE(logger, clock, 5000, "waiting lanelet map... Route API is not ready.");
     return;
   }
+  // 如果里程计数据未收到，等待里程计
   if (!odometry_) {
     RCLCPP_INFO_THROTTLE(logger, clock, 5000, "waiting odometry... Route API is not ready.");
     return;
   }
 
+  // 所有数据已准备好，API 可用
   // All data is ready. Now API is available.
   is_mission_planner_ready_ = true;
   RCLCPP_DEBUG(logger, "Route API is ready.");
   change_state(RouteState::UNSET);
 
+  // 停止定时器回调
   // Stop timer callback.
   data_check_timer_->cancel();
   data_check_timer_ = nullptr;
 }
 
+// 里程计回调函数
 void MissionPlanner::on_odometry(const Odometry::ConstSharedPtr msg)
 {
   odometry_ = msg;
 
+  // 注意：在其他状态下不要检查，因为目标可能会改变
   // NOTE: Do not check in the other states as goal may change.
   if (state_.state == RouteState::SET) {
     PoseStamped pose;
     pose.header = odometry_->header;
     pose.pose = odometry_->pose.pose;
+    // 检查是否到达目标点
     if (arrival_checker_.is_arrived(pose)) {
       change_state(RouteState::ARRIVED);
     }
   }
 }
 
+// 操作模式状态回调函数
 void MissionPlanner::on_operation_mode_state(const OperationModeState::ConstSharedPtr msg)
 {
   operation_mode_state_ = msg;
 }
 
+// 地图回调函数
 void MissionPlanner::on_map(const LaneletMapBin::ConstSharedPtr msg)
 {
   map_ptr_ = msg;
@@ -163,6 +202,7 @@ void MissionPlanner::on_map(const LaneletMapBin::ConstSharedPtr msg)
   lanelet::utils::conversion::fromBinMsg(*map_ptr_, lanelet_map_ptr_);
 }
 
+// 转换位姿到地图坐标系
 Pose MissionPlanner::transform_pose(const Pose & pose, const Header & header)
 {
   geometry_msgs::msg::TransformStamped transform;
@@ -176,6 +216,7 @@ Pose MissionPlanner::transform_pose(const Pose & pose, const Header & header)
   }
 }
 
+// 改变路径状态
 void MissionPlanner::change_state(RouteState::_state_type state)
 {
   state_.stamp = now();
@@ -183,6 +224,7 @@ void MissionPlanner::change_state(RouteState::_state_type state)
   pub_state_->publish(state_);
 }
 
+// 修改目标点回调函数
 void MissionPlanner::on_modified_goal(const PoseWithUuidStamped::ConstSharedPtr msg)
 {
   RCLCPP_INFO(get_logger(), "Received modified goal.");
@@ -219,6 +261,7 @@ void MissionPlanner::on_modified_goal(const PoseWithUuidStamped::ConstSharedPtr 
   RCLCPP_INFO(get_logger(), "Changed the route with the modified goal");
 }
 
+// 清除路径服务回调函数
 void MissionPlanner::on_clear_route(
   const ClearRoute::Request::SharedPtr, const ClearRoute::Response::SharedPtr res)
 {
@@ -233,6 +276,7 @@ void MissionPlanner::on_clear_route(
   res->status.success = true;
 }
 
+// 设置 Lanelet 路径服务回调函数
 void MissionPlanner::on_set_lanelet_route(
   const SetLaneletRoute::Request::SharedPtr req, const SetLaneletRoute::Response::SharedPtr res)
 {
@@ -296,6 +340,7 @@ void MissionPlanner::on_set_lanelet_route(
   publish_pose_log(req->goal_pose, "goal");
 }
 
+// 设置 Waypoint 路径服务回调函数
 void MissionPlanner::on_set_waypoint_route(
   const SetWaypointRoute::Request::SharedPtr req, const SetWaypointRoute::Response::SharedPtr res)
 {
@@ -354,6 +399,7 @@ void MissionPlanner::on_set_waypoint_route(
   publish_pose_log(req->goal_pose, "goal");
 }
 
+// 改变路径
 void MissionPlanner::change_route()
 {
   current_route_ = nullptr;
@@ -365,6 +411,8 @@ void MissionPlanner::change_route()
   // pub_marker_->publish();
 }
 
+
+// 改变路径
 void MissionPlanner::change_route(const LaneletRoute & route)
 {
   PoseWithUuidStamped goal;
@@ -380,14 +428,17 @@ void MissionPlanner::change_route(const LaneletRoute & route)
   pub_marker_->publish(planner_->visualize(route));
 }
 
+// 取消路径
 void MissionPlanner::cancel_route()
 {
+  // 恢复路径规划器状态
   // Restore planner state that changes with create_route function.
   if (current_route_) {
     planner_->updateRoute(*current_route_);
   }
 }
 
+// 创建 Lanelet 路径
 LaneletRoute MissionPlanner::create_route(const SetLaneletRoute::Request & req)
 {
   const auto & header = req.header;
@@ -399,6 +450,7 @@ LaneletRoute MissionPlanner::create_route(const SetLaneletRoute::Request & req)
   return create_route(header, segments, goal_pose, uuid, allow_goal_modification);
 }
 
+// 创建 Waypoint 路径
 LaneletRoute MissionPlanner::create_route(const SetWaypointRoute::Request & req)
 {
   const auto & header = req.header;
@@ -411,6 +463,7 @@ LaneletRoute MissionPlanner::create_route(const SetWaypointRoute::Request & req)
     header, waypoints, odometry_->pose.pose, goal_pose, uuid, allow_goal_modification);
 }
 
+// 创建路径
 LaneletRoute MissionPlanner::create_route(const PoseWithUuidStamped & msg)
 {
   const auto & header = msg.header;
@@ -435,6 +488,7 @@ LaneletRoute MissionPlanner::create_route(const PoseWithUuidStamped & msg)
   return create_route(header, waypoints, start_pose, goal_pose, uuid, allow_goal_modification);
 }
 
+// 创建 Lanelet 路径
 LaneletRoute MissionPlanner::create_route(
   const Header & header, const std::vector<LaneletSegment> & segments, const Pose & goal_pose,
   const UUID & uuid, const bool allow_goal_modification)
@@ -450,6 +504,7 @@ LaneletRoute MissionPlanner::create_route(
   return route;
 }
 
+// 创建 Waypoint 路径
 LaneletRoute MissionPlanner::create_route(
   const Header & header, const std::vector<Pose> & waypoints, const Pose & start_pose,
   const Pose & goal_pose, const UUID & uuid, const bool allow_goal_modification)
@@ -469,9 +524,13 @@ LaneletRoute MissionPlanner::create_route(
   return route;
 }
 
+// 检查重新规划路径的安全性
+// 提取前后路径的公共部分，如果长度大于阈值，认为是安全的
 bool MissionPlanner::check_reroute_safety(
   const LaneletRoute & original_route, const LaneletRoute & target_route)
 {
+
+  // 安全检查
   if (
     original_route.segments.empty() || target_route.segments.empty() || !map_ptr_ ||
     !lanelet_map_ptr_ || !odometry_) {
@@ -481,6 +540,7 @@ bool MissionPlanner::check_reroute_safety(
 
   const auto current_velocity = odometry_->twist.twist.linear.x;
 
+  // 如果车辆停止，不检查安全性
   // if vehicle is stopped, do not check safety
   if (current_velocity < 0.01) {
     return true;
@@ -513,6 +573,14 @@ bool MissionPlanner::check_reroute_safety(
   // in the original route. In that case the common segment interval does not match the beginning of
   // the target lanelet
   // =============================================================================================
+
+  // =============================================================================================
+  // 注意：目标路径是在车辆在原始路径上行驶时计算的，因此目标路径的第一条车道应在原始路径的车道中。
+  // 所以共同段间隔匹配目标路径的开始。例外情况是如果车辆在交叉口车道上，getClosestLanelet() 可能不会返回原始路径中存在的车道。
+  // 在这种情况下，共同段间隔不匹配目标车道的开始。
+  // =============================================================================================
+
+  // 判断两条路由是否交叉部分，设置为start_idx_opt
   const auto start_idx_opt =
     std::invoke([&]() -> std::optional<std::pair<size_t /* original */, size_t /* target */>> {
       for (size_t i = 0; i < original_route.segments.size(); ++i) {
@@ -526,6 +594,8 @@ bool MissionPlanner::check_reroute_safety(
       }
       return std::nullopt;
     });
+
+  // 如果没找到，直接认为不安全
   if (!start_idx_opt.has_value()) {
     RCLCPP_ERROR(
       get_logger(), "Check reroute safety failed. Cannot find the start index of the route.");
@@ -533,6 +603,7 @@ bool MissionPlanner::check_reroute_safety(
   }
   const auto [start_idx_original, start_idx_target] = start_idx_opt.value();
 
+  // 找到与目标原语匹配的最后一个索引
   // find last idx that matches the target primitives
   size_t end_idx_original = start_idx_original;
   size_t end_idx_target = start_idx_target;
@@ -551,15 +622,20 @@ bool MissionPlanner::check_reroute_safety(
     end_idx_target = start_idx_target + i;
   }
 
+  // 在从主路径/MRM 到 MRM/主路径的第一次转换时，route_selector 请求的路径可能不是从当前车道开始的
   // at the very first transition from main/MRM to MRM/main, the requested route from the
   // route_selector may not begin from ego current lane (because route_selector requests the
   // previous route once, and then replan)
+
+  // 判断车辆是否在target_route的某个segment中
   const bool ego_is_on_first_target_section = std::any_of(
     target_route.segments.front().primitives.begin(),
     target_route.segments.front().primitives.end(), [&](const auto & primitive) {
       const auto lanelet = lanelet_map_ptr_->laneletLayer.get(primitive.id);
       return lanelet::utils::isInLanelet(target_route.start_pose, lanelet);
     });
+
+  // 如果没找到，直接报错
   if (!ego_is_on_first_target_section) {
     RCLCPP_ERROR(
       get_logger(),
@@ -567,20 +643,26 @@ bool MissionPlanner::check_reroute_safety(
     return false;
   }
 
+  // 如果目标路径的前面不是共同段的前面，则预计目标路径的前面与另一条车道冲突
   // if the front of target route is not the front of common segment, it is expected that the front
   // of the target route is conflicting with another lane which is equal to original
   // route[start_idx_original-1]
   double accumulated_length = 0.0;
 
   if (start_idx_target != 0 && start_idx_original > 1) {
+    // 计算从当前位置到共同段开始的距离
     // compute distance from the current pose to the beginning of the common segment
     const auto current_pose = target_route.start_pose;
     const auto primitives = original_route.segments.at(start_idx_original - 1).primitives;
+
+    // 提取起始primitives的所有lanelet
     lanelet::ConstLanelets start_lanelets;
     for (const auto & primitive : primitives) {
       const auto lanelet = lanelet_map_ptr_->laneletLayer.get(primitive.id);
       start_lanelets.push_back(lanelet);
     }
+
+    // 从候选lanelet获取最近的lanelet，赋值到closest_lanelet
     // closest lanelet in start lanelets
     lanelet::ConstLanelet closest_lanelet;
     if (!lanelet::utils::query::getClosestLanelet(start_lanelets, current_pose, &closest_lanelet)) {
@@ -596,6 +678,7 @@ bool MissionPlanner::check_reroute_safety(
     const double lanelet_length = lanelet::utils::getLaneletLength2d(closest_lanelet);
     accumulated_length = lanelet_length - dist_to_current_pose;
   } else {
+    // 计算从当前位置到当前车道末端的距离
     // compute distance from the current pose to the end of the current lanelet
     const auto current_pose = target_route.start_pose;
     const auto primitives = original_route.segments.at(start_idx_original).primitives;
@@ -636,6 +719,7 @@ bool MissionPlanner::check_reroute_safety(
     accumulated_length += *std::min_element(lanelets_length.begin(), lanelets_length.end());
   }
 
+  // 减去目标点到多余的距离
   // check if the goal is inside of the target terminal lanelet
   const auto & target_end_primitives = target_route.segments.at(end_idx_target).primitives;
   const auto & target_goal = target_route.goal_pose;
@@ -658,6 +742,7 @@ bool MissionPlanner::check_reroute_safety(
     }
   }
 
+  // 如果公共部分的距离大于给定值，认为路径安全
   // check safety
   const double safety_length =
     std::max(current_velocity * reroute_time_threshold_, minimum_reroute_length_);

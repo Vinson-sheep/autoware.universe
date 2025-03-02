@@ -19,13 +19,17 @@
 namespace service_utils
 {
 
+// 创建一个表示服务未准备好的异常
 ServiceException ServiceUnready(const std::string & message)
 {
+  // 返回一个 ServiceException 对象，状态为 SERVICE_UNREADY，附带错误信息
   return ServiceException(ResponseStatus::SERVICE_UNREADY, message, false);
 }
 
+// 创建一个表示坐标转换错误的异常
 ServiceException TransformError(const std::string & message)
 {
+  // 返回一个 ServiceException 对象，状态为 TRANSFORM_ERROR，附带错误信息
   return ServiceException(ResponseStatus::TRANSFORM_ERROR, message, false);
 };
 
