@@ -44,6 +44,7 @@ using unique_identifier_msgs::msg::UUID;
 using SceneModulePtr = std::shared_ptr<SceneModuleInterface>;
 using SceneModuleObserver = std::weak_ptr<SceneModuleInterface>;
 
+// 场景管理器（SceneModuleManagerInterface）是一个核心组件，负责管理和协调不同的场景模块。
 class SceneModuleManagerInterface
 {
 public:
@@ -59,6 +60,7 @@ public:
 
   void updateIdleModuleInstance();
 
+  // 执行请求检查
   bool isExecutionRequested(const BehaviorModuleOutput & previous_module_output) const
   {
     idle_module_ptr_->setData(planner_data_);
@@ -68,6 +70,7 @@ public:
     return idle_module_ptr_->isExecutionRequested();
   }
 
+  // 注册新模块
   void registerNewModule(
     const SceneModuleObserver & observer, const BehaviorModuleOutput & previous_module_output)
   {
@@ -80,9 +83,11 @@ public:
     observer.lock()->getTimeKeeper()->add_reporter(this->pub_processing_time_);
     observer.lock()->onEntry();
 
+    // 将新模块插入到列表中
     observers_.push_back(observer);
   }
 
+  // 更新观察者列表（移除过期的观察者）
   void updateObserver()
   {
     const auto itr = std::remove_if(
@@ -92,6 +97,7 @@ public:
     observers_.erase(itr, observers_.end());
   }
 
+  // RTC（Real-Time Control）管理
   void publishRTCStatus()
   {
     for (const auto & [module_name, ptr] : rtc_interface_ptr_map_) {
@@ -104,6 +110,7 @@ public:
 
   void publish_planning_factors() { planning_factor_interface_->publish(); }
 
+  // 发布虚拟墙（用于可视化停止点、减速点等）
   void publishVirtualWall() const
   {
     using autoware_utils::append_marker_array;
@@ -146,6 +153,7 @@ public:
     pub_virtual_wall_->publish(markers);
   }
 
+  // 发布调试标记
   void publishMarker() const
   {
     using autoware_utils::append_marker_array;
@@ -207,8 +215,10 @@ public:
    * - No other instance of the same name of scene module is currently active or registered.
    *
    */
+  // 检查是否可以启动新模块
   bool canLaunchNewModule() const { return observers_.empty(); }
 
+  // 并发执行控制
   virtual bool isSimultaneousExecutableAsApprovedModule() const
   {
     return config_.enable_simultaneous_execution_as_approved_module;
@@ -221,8 +231,10 @@ public:
 
   void setData(const std::shared_ptr<PlannerData> & planner_data) { planner_data_ = planner_data; }
 
+  // 重置所有模块
   void reset()
   {
+    // 退出所有观察者
     std::for_each(observers_.begin(), observers_.end(), [](const auto & observer) {
       if (!observer.expired()) {
         observer.lock()->onExit();
@@ -231,6 +243,7 @@ public:
 
     observers_.clear();
 
+    // 重置空闲模块
     if (idle_module_ptr_ != nullptr) {
       idle_module_ptr_->onExit();
       idle_module_ptr_.reset();
@@ -264,18 +277,14 @@ protected:
 
   rclcpp::Publisher<autoware_utils::ProcessingTimeDetail>::SharedPtr pub_processing_time_;
 
-  std::string name_;
-
-  std::shared_ptr<PlannerData> planner_data_;
-
-  std::vector<SceneModuleObserver> observers_;
-
-  std::unique_ptr<SceneModuleInterface> idle_module_ptr_;
-
+  std::string name_;  // 管理器名称
+  std::shared_ptr<PlannerData> planner_data_; // 规划器数据
+  std::vector<SceneModuleObserver> observers_;  // 场景模块观察者列表
+  std::unique_ptr<SceneModuleInterface> idle_module_ptr_; // 空闲模块
   std::shared_ptr<PlanningFactorInterface> planning_factor_interface_;
 
+  // 接口映射
   std::unordered_map<std::string, std::shared_ptr<RTCInterface>> rtc_interface_ptr_map_;
-
   std::unordered_map<std::string, std::shared_ptr<ObjectsOfInterestMarkerInterface>>
     objects_of_interest_marker_interface_ptr_map_;
 

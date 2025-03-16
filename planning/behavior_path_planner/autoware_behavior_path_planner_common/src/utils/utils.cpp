@@ -966,6 +966,8 @@ PathWithLaneId getCenterLinePathFromLanelet(
     p);
 }
 
+
+// 提取lanelet_sequence的中心线
 PathWithLaneId getCenterLinePath(
   const RouteHandler & route_handler, const lanelet::ConstLanelets & lanelet_sequence,
   const Pose & pose, const double backward_path_length, const double forward_path_length,
@@ -973,31 +975,37 @@ PathWithLaneId getCenterLinePath(
 {
   PathWithLaneId reference_path;
 
+  // 安全校验
   if (lanelet_sequence.empty()) {
     return reference_path;
   }
 
+  // 转换到frenet坐标系
   const auto arc_coordinates = lanelet::utils::getArcCoordinates(lanelet_sequence, pose);
   const double s = arc_coordinates.length;
   const double s_backward = std::max(0., s - backward_path_length);
   double s_forward = s + forward_path_length;
 
+  // 如果lanelet之后没有Lanelet了，取整一段lanelet
   if (route_handler.isDeadEndLanelet(lanelet_sequence.back())) {
     const auto lane_length = lanelet::utils::getLaneletLength2d(lanelet_sequence);
     s_forward = std::clamp(s_forward, 0.0, lane_length);
   }
 
+  // 如果lanelet包含目标点，截取到目标点位置
   if (route_handler.isInGoalRouteSection(lanelet_sequence.back())) {
     const auto goal_arc_coordinates =
       lanelet::utils::getArcCoordinates(lanelet_sequence, route_handler.getGoalPose());
     s_forward = std::clamp(s_forward, 0.0, goal_arc_coordinates.length);
   }
 
+  // 递归？
   const auto raw_path_with_lane_id =
     route_handler.getCenterLinePath(lanelet_sequence, s_backward, s_forward, true);
   auto resampled_path_with_lane_id = autoware::motion_utils::resamplePath(
     raw_path_with_lane_id, parameter.input_path_interval, parameter.enable_akima_spline_first);
 
+  // 将路径转换到后轮
   // convert centerline, which we consider as CoG center,  to rear wheel center
   if (parameter.enable_cog_on_centerline) {
     const double rear_to_cog = parameter.vehicle_length / 2 - parameter.rear_overhang;
@@ -1413,9 +1421,11 @@ bool checkPathRelativeAngle(const PathWithLaneId & path, const double angle_thre
   return true;
 }
 
+// 根据path中的id提取所有lanelet
 lanelet::ConstLanelets getLaneletsFromPath(
   const PathWithLaneId & path, const std::shared_ptr<RouteHandler> & route_handler)
 {
+  // 提取所有id
   std::vector<int64_t> unique_lanelet_ids;
   for (const auto & p : path.points) {
     const auto & lane_ids = p.lane_ids;
@@ -1427,7 +1437,7 @@ lanelet::ConstLanelets getLaneletsFromPath(
       }
     }
   }
-
+  // 提取lanelet
   lanelet::ConstLanelets lanelets;
   for (const auto & lane_id : unique_lanelet_ids) {
     lanelets.push_back(route_handler->getLaneletsFromId(lane_id));

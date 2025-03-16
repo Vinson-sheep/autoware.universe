@@ -31,12 +31,15 @@
 
 namespace autoware::behavior_path_planner::utils::path_safety_checker::filter
 {
+
+// 速度过滤器：根据物体的速度进行过滤
 bool velocity_filter(const Twist & object_twist, double velocity_threshold, double max_velocity)
 {
   const auto v_norm = std::hypot(object_twist.linear.x, object_twist.linear.y);
   return (velocity_threshold < v_norm && v_norm < max_velocity);
 }
 
+// 位置过滤器：根据物体与自车的相对位置进行过滤
 bool position_filter(
   const PredictedObject & object, const std::vector<PathPointWithLaneId> & path_points,
   const geometry_msgs::msg::Point & current_pose, const double forward_distance,
@@ -44,12 +47,14 @@ bool position_filter(
 {
   if (path_points.empty()) return false;
 
+  // 计算投影s
   const auto dist_ego_to_obj = autoware::motion_utils::calcSignedArcLength(
     path_points, current_pose, object.kinematics.initial_pose_with_covariance.pose.position);
 
   return (backward_distance < dist_ego_to_obj && dist_ego_to_obj < forward_distance);
 }
 
+// 判断物体是否在指定半径的圆内
 bool is_within_circle(
   const geometry_msgs::msg::Point & object_pos, const geometry_msgs::msg::Point & reference_point,
   const double search_radius)
@@ -59,6 +64,7 @@ bool is_within_circle(
   return dist < search_radius;
 }
 
+// 判断物体是否是车辆
 bool is_vehicle(const ObjectClassification & classification)
 {
   switch (classification.label) {
@@ -76,6 +82,8 @@ bool is_vehicle(const ObjectClassification & classification)
 
 namespace autoware::behavior_path_planner::utils::path_safety_checker
 {
+
+// 判断物体的质心是否在车道内
 bool isCentroidWithinLanelet(
   const PredictedObject & object, const lanelet::ConstLanelet & lanelet, const double yaw_threshold)
 {
@@ -91,6 +99,7 @@ bool isCentroidWithinLanelet(
   return std::abs(autoware_utils::calc_yaw_deviation(closest_pose, object_pose)) < yaw_threshold;
 }
 
+// 判断物体的多边形是否与车道重叠
 bool isPolygonOverlapLanelet(
   const PredictedObject & object, const lanelet::ConstLanelet & lanelet, const double yaw_threshold)
 {
@@ -104,6 +113,7 @@ bool isPolygonOverlapLanelet(
   return std::abs(autoware_utils::calc_yaw_deviation(closest_pose, object_pose)) < yaw_threshold;
 }
 
+// 判断物体的多边形是否与车道多边形重叠
 bool isPolygonOverlapLanelet(
   const PredictedObject & object, const autoware_utils::Polygon2d & lanelet_polygon)
 {
@@ -111,6 +121,7 @@ bool isPolygonOverlapLanelet(
   return !boost::geometry::disjoint(lanelet_polygon, object_polygon);
 }
 
+// 判断物体的多边形是否与车道多边形重叠（基于基本多边形）
 bool isPolygonOverlapLanelet(
   const PredictedObject & object, const lanelet::BasicPolygon2d & lanelet_polygon)
 {
@@ -118,13 +129,14 @@ bool isPolygonOverlapLanelet(
   return !boost::geometry::disjoint(lanelet_polygon, object_polygon);
 }
 
+// 过滤物体：根据速度、类别和位置进行过滤
 PredictedObjects filterObjects(
   const std::shared_ptr<const PredictedObjects> & objects,
   const std::shared_ptr<RouteHandler> & route_handler, const lanelet::ConstLanelets & current_lanes,
   const geometry_msgs::msg::Point & current_pose,
   const std::shared_ptr<ObjectsFilteringParams> & params)
 {
-  // Guard
+  // 检查输入是否有效
   if (objects->objects.empty() || !params) {
     return PredictedObjects();
   }
@@ -134,14 +146,18 @@ PredictedObjects filterObjects(
   const double object_check_backward_distance = params->object_check_backward_distance;
   const ObjectTypesToCheck & target_object_types = params->object_types_to_check;
 
+  // 根据速度过滤物体
   PredictedObjects filtered_objects =
     filterObjectsByVelocity(*objects, ignore_object_velocity_threshold, true);
 
+  // 根据类别过滤物体
   filterObjectsByClass(filtered_objects, target_object_types);
 
+  // 获取路径
   const auto path = route_handler->getCenterLinePath(
     current_lanes, object_check_backward_distance, object_check_forward_distance);
 
+  // 根据位置过滤物体
   filterObjectsByPosition(
     filtered_objects, path.points, current_pose, object_check_forward_distance,
     object_check_backward_distance);
@@ -149,6 +165,7 @@ PredictedObjects filterObjects(
   return filtered_objects;
 }
 
+// 根据速度过滤物体
 PredictedObjects filterObjectsByVelocity(
   const PredictedObjects & objects, const double velocity_threshold,
   const bool remove_above_threshold)
@@ -159,6 +176,7 @@ PredictedObjects filterObjectsByVelocity(
   return filterObjectsByVelocity(objects, velocity_threshold, std::numeric_limits<double>::max());
 }
 
+// 根据速度范围过滤物体
 PredictedObjects filterObjectsByVelocity(
   const PredictedObjects & objects, double velocity_threshold, double max_velocity)
 {
@@ -172,6 +190,7 @@ PredictedObjects filterObjectsByVelocity(
   return filtered;
 }
 
+// 根据位置过滤物体
 void filterObjectsByPosition(
   PredictedObjects & objects, const std::vector<PathPointWithLaneId> & path_points,
   const geometry_msgs::msg::Point & current_pose, const double forward_distance,
@@ -185,6 +204,7 @@ void filterObjectsByPosition(
   filterObjects(objects, filter);
 }
 
+// 根据半径过滤物体
 void filterObjectsWithinRadius(
   PredictedObjects & objects, const geometry_msgs::msg::Point & reference_point,
   const double search_radius)
@@ -197,6 +217,7 @@ void filterObjectsWithinRadius(
   filterObjects(objects, filter);
 }
 
+// 根据类别过滤物体
 void filterObjectsByClass(
   PredictedObjects & objects, const ObjectTypesToCheck & target_object_types)
 {
@@ -207,12 +228,14 @@ void filterObjectsByClass(
   filterObjects(objects, filter);
 }
 
+// 根据车道分离物体索引
 std::pair<std::vector<size_t>, std::vector<size_t>> separateObjectIndicesByLanelets(
   const PredictedObjects & objects, const lanelet::ConstLanelets & target_lanelets,
   const std::function<bool(const PredictedObject, const lanelet::ConstLanelet, const double)> &
     condition,
   const double yaw_threshold)
 {
+  // 如果Lanelets为空，不处理
   if (target_lanelets.empty()) {
     return {};
   }
@@ -220,14 +243,19 @@ std::pair<std::vector<size_t>, std::vector<size_t>> separateObjectIndicesByLanel
   std::vector<size_t> target_indices;
   std::vector<size_t> other_indices;
 
+  // 遍历所有物体
   for (size_t i = 0; i < objects.objects.size(); i++) {
     const auto filter = [&](const auto & llt) {
       return condition(objects.objects.at(i), llt, yaw_threshold);
     };
+    // 判断物体是否在车道中
     const auto found = std::find_if(target_lanelets.begin(), target_lanelets.end(), filter);
+    // 如果物体在车道内，插入target_indices
     if (found != target_lanelets.end()) {
       target_indices.push_back(i);
-    } else {
+    } 
+    // 否则，插入到other_indices
+    else {
       other_indices.push_back(i);
     }
   }
@@ -235,6 +263,7 @@ std::pair<std::vector<size_t>, std::vector<size_t>> separateObjectIndicesByLanel
   return std::make_pair(target_indices, other_indices);
 }
 
+// 根据车道分离物体
 std::pair<PredictedObjects, PredictedObjects> separateObjectsByLanelets(
   const PredictedObjects & objects, const lanelet::ConstLanelets & target_lanelets,
   const std::function<bool(const PredictedObject, const lanelet::ConstLanelet, const double)> &
@@ -261,6 +290,7 @@ std::pair<PredictedObjects, PredictedObjects> separateObjectsByLanelets(
   return std::make_pair(target_objects, other_objects);
 }
 
+// 从物体中获取预测路径
 std::vector<PredictedPathWithPolygon> getPredictedPathFromObj(
   const ExtendedPredictedObject & obj, const bool & is_use_all_predicted_path)
 {
@@ -276,6 +306,7 @@ std::vector<PredictedPathWithPolygon> getPredictedPathFromObj(
   return obj.predicted_paths;
 }
 
+// 创建预测路径
 std::vector<PoseWithVelocityStamped> createPredictedPath(
   const std::shared_ptr<EgoPredictedPathParams> & ego_predicted_path_params,
   const std::vector<PathPointWithLaneId> & path_points,
@@ -304,9 +335,11 @@ std::vector<PoseWithVelocityStamped> createPredictedPath(
     double velocity = 0.0;
     double length = 0.0;
 
+    // 如果 t < delay_until_departure，表示自车尚未出发，速度为 0，位置不变
     // If t < delay_until_departure, it means ego have not depart yet, therefore the velocity is
     // 0 and there's no change in position.
     if (t >= delay_until_departure) {
+      // 调整时间以考虑延迟
       // Adjust time to consider the delay.
       double t_with_delay = t - delay_until_departure;
       velocity =
@@ -322,6 +355,7 @@ std::vector<PoseWithVelocityStamped> createPredictedPath(
   return predicted_path;
 }
 
+// 判断物体的质心是否在车道内
 bool isCentroidWithinLanelets(
   const PredictedObject & object, const lanelet::ConstLanelets & target_lanelets)
 {
@@ -339,6 +373,7 @@ bool isCentroidWithinLanelets(
   return std::any_of(target_lanelets.begin(), target_lanelets.end(), is_within);
 }
 
+// 转换物体为扩展预测物体
 ExtendedPredictedObject transform(
   const PredictedObject & object, const double safety_check_time_horizon,
   const double safety_check_time_resolution)
@@ -352,7 +387,7 @@ ExtendedPredictedObject transform(
     const auto & path = object.kinematics.predicted_paths[i];
     extended_object.predicted_paths[i].confidence = path.confidence;
 
-    // Create path based on time horizon and resolution
+    // 根据时间范围和分辨率创建路径
     for (double t = 0.0; t < safety_check_time_horizon + 1e-3; t += safety_check_time_resolution) {
       const auto obj_pose = autoware::object_recognition_utils::calcInterpolatedPose(path, t);
       if (obj_pose) {
@@ -366,6 +401,7 @@ ExtendedPredictedObject transform(
   return extended_object;
 }
 
+// 创建车道上的目标物体
 TargetObjectsOnLane createTargetObjectsOnLane(
   const lanelet::ConstLanelets & current_lanes, const std::shared_ptr<RouteHandler> & route_handler,
   const PredictedObjects & filtered_objects, const std::shared_ptr<ObjectsFilteringParams> & params)
@@ -378,7 +414,7 @@ TargetObjectsOnLane createTargetObjectsOnLane(
 
   lanelet::ConstLanelets all_left_lanelets;
   lanelet::ConstLanelets all_right_lanelets;
-  // TODO(sugahara): consider right side parking and define right shoulder lanelets
+  // TODO(sugahara): 考虑右侧停车并定义右侧路肩车道
   lanelet::ConstLanelets all_left_shoulder_lanelets;
 
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
@@ -419,7 +455,7 @@ TargetObjectsOnLane createTargetObjectsOnLane(
       });
   };
 
-  // TODO(Sugahara): Consider other lane objects
+  // TODO(Sugahara): 考虑其他车道物体
   if (object_lane_configuration.check_current_lane && !current_lanes.empty()) {
     append_objects_on_lane(target_objects_on_lane.on_current_lane, current_lanes);
   }
@@ -436,6 +472,7 @@ TargetObjectsOnLane createTargetObjectsOnLane(
   return target_objects_on_lane;
 }
 
+// 判断物体是否为目标类型
 bool isTargetObjectType(
   const PredictedObject & object, const ObjectTypesToCheck & target_object_types)
 {

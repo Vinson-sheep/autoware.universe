@@ -153,14 +153,14 @@ struct RSSparams
   std::string extended_polygon_policy{
     "rectangle"};                               ///< Policy to create collision check polygon.
                                                 ///< possible values: ["rectangle", "along_path"]
-  double rear_vehicle_reaction_time{0.0};       ///< Reaction time of the rear vehicle.
-  double rear_vehicle_safety_time_margin{0.0};  ///< Safety time margin for the rear vehicle.
-  double lateral_distance_max_threshold{0.0};   ///< Maximum threshold for lateral distance.
+  double rear_vehicle_reaction_time{0.0};       ///< Reaction time of the rear vehicle. // 后方车辆反应时间
+  double rear_vehicle_safety_time_margin{0.0};  ///< Safety time margin for the rear vehicle. // 后方车辆安全时间裕度
+  double lateral_distance_max_threshold{0.0};   ///< Maximum threshold for lateral distance.  // 横向距离裕度
   double longitudinal_distance_min_threshold{
-    0.0};                                        ///< Minimum threshold for longitudinal distance.
+    0.0};                                        ///< Minimum threshold for longitudinal distance.  // 纵向距离裕度
   double longitudinal_velocity_delta_time{0.0};  ///< Delta time for longitudinal velocity.
-  double front_vehicle_deceleration{0.0};        ///< brake parameter
-  double rear_vehicle_deceleration{0.0};         ///< brake parameter
+  double front_vehicle_deceleration{0.0};        ///< brake parameter // 前方车辆减速度
+  double rear_vehicle_deceleration{0.0};         ///< brake parameter // 后方车辆减速度
 };
 
 struct IntegralPredictedPolygonParams

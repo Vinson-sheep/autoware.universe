@@ -41,12 +41,14 @@ namespace autoware::behavior_path_planner::drivable_area_expansion
 
 namespace
 {
+// 将点转换为二维点
 Point2d convert_point(const Point & p)
 {
   return Point2d{p.x, p.y};
 }
 }  // namespace
 
+// 重用之前的路径点
 void reuse_previous_poses(
   const PathWithLaneId & path, std::vector<Pose> & prev_poses,
   std::vector<double> & prev_curvatures, const Point & ego_point,
@@ -54,12 +56,15 @@ void reuse_previous_poses(
 {
   std::vector<Pose> cropped_poses;
   std::vector<double> cropped_curvatures;
+
+  // 检查自车是否在之前的路径点之后
   const auto ego_is_behind =
     prev_poses.size() > 1 &&
     autoware::motion_utils::calcLongitudinalOffsetToSegment(prev_poses, 0, ego_point) < 0.0;
+  // 检查自车是否离之前的路径点太远
   const auto ego_is_far =
     !prev_poses.empty() && autoware_utils::calc_distance2d(ego_point, prev_poses.front()) < 0.0;
-  // make sure the reused points are not behind the current original drivable area
+  // 确保重用的点不在当前原始可行驶区域之后
   LineString2d left_bound;
   LineString2d right_bound;
   for (const auto & p : path.left_bound) left_bound.push_back(convert_point(p));
@@ -119,6 +124,7 @@ void reuse_previous_poses(
   prev_curvatures = cropped_curvatures;
 }
 
+// 计算最小车道宽度
 double calculate_minimum_lane_width(
   const double curvature_radius, const DrivableAreaExpansionParameters & params)
 {
@@ -129,6 +135,7 @@ double calculate_minimum_lane_width(
   return (a * a + 2.0 * a * l + 2.0 * k * w + l * l + w * w) / (2.0 * k + w);
 }
 
+// 计算边界索引映射
 void calculate_bound_index_mappings(
   Expansion & expansion, const std::vector<Pose> & path_poses, const std::vector<Point> & bound,
   const Side side)
@@ -155,6 +162,7 @@ void calculate_bound_index_mappings(
   }
 }
 
+// 应用弧长范围平滑
 void apply_arc_length_range_smoothing(
   Expansion & expansion, const std::vector<Point> & bound, const double arc_length_range,
   const Side side)
@@ -186,6 +194,7 @@ void apply_arc_length_range_smoothing(
   }
 }
 
+// 计算扩展
 Expansion calculate_expansion(
   const std::vector<Pose> & path_poses, const std::vector<Point> & left_bound,
   const std::vector<Point> & right_bound, const std::vector<double> & curvatures,
@@ -203,6 +212,8 @@ Expansion calculate_expansion(
   return expansion;
 }
 
+
+// 应用边界变化率限制
 void apply_bound_change_rate_limit(
   std::vector<double> & distances, const std::vector<Point> & bound, const double max_rate)
 {
@@ -218,6 +229,7 @@ void apply_bound_change_rate_limit(
   for (auto idx = distances.size() - 1; idx > 0; --idx) apply_max_vel(distances, idx, idx - 1);
 }
 
+// 计算最大距离
 std::vector<double> calculate_maximum_distance(
   const std::vector<Point> & bound, const SegmentRtree & uncrossable_segments,
   const std::vector<Polygon2d> & uncrossable_polygons,
@@ -270,6 +282,7 @@ std::vector<double> calculate_maximum_distance(
   return maximum_distances;
 }
 
+// 扩展边界
 void expand_bound(
   std::vector<Point> & bound, const std::vector<Pose> & path_poses,
   const std::vector<double> & expansions)
@@ -283,7 +296,7 @@ void expand_bound(
       const auto expansion_ratio = (expansions[idx] + projection.distance) / projection.distance;
       const auto & path_p = projection.projected_point;
       auto expanded_p = lerp_point(path_p, bound_p, expansion_ratio);
-      // push the bound again if it got too close to another part of the path
+      // 如果边界点离路径的其他部分太近，则再次推远
       const auto new_projection = point_to_linestring_projection(expanded_p, path_ls);
       if (new_projection.distance < projection.distance) {
         const auto new_expansion_ratio = (projection.distance) / new_projection.distance;
@@ -294,6 +307,7 @@ void expand_bound(
     }
   }
 
+  // 通过跳过循环内的点来移除自交
   // remove any self intersection by skipping the points inside of the loop
   std::vector<Point> no_loop_bound = {bound.front()};
   for (auto idx = 1LU; idx < bound.size(); ++idx) {
@@ -313,6 +327,7 @@ void expand_bound(
   bound = no_loop_bound;
 }
 
+// 计算平滑后的曲率
 std::vector<double> calculate_smoothed_curvatures(
   const std::vector<Pose> & poses, const size_t smoothing_window_size)
 {
@@ -327,6 +342,8 @@ std::vector<double> calculate_smoothed_curvatures(
   }
   return smoothed_curvatures;
 }
+
+// 计算扩展距离
 void calculate_expansion_distances(
   Expansion & expansion, const std::vector<double> & max_left_expansions,
   const std::vector<double> & max_right_expansions)
@@ -371,6 +388,7 @@ void calculate_expansion_distances(
   }
 }
 
+// 添加边界点
 void add_bound_point(std::vector<Point> & bound, const Pose & pose, const double min_bound_interval)
 {
   const auto p = convert_point(pose.position);
@@ -397,6 +415,7 @@ void add_bound_point(std::vector<Point> & bound, const Pose & pose, const double
   }
 }
 
+// 添加边界点
 void add_bound_points(
   std::vector<Point> & left_bound, std::vector<Point> & right_bound,
   const std::vector<Pose> & path_poses, const double min_bound_interval)
@@ -407,10 +426,12 @@ void add_bound_points(
   }
 }
 
+// 扩展可行驶区域
 void expand_drivable_area(
   PathWithLaneId & path,
   const std::shared_ptr<const autoware::behavior_path_planner::PlannerData> planner_data)
 {
+  // 如果没有边界或路径点不足以计算曲率，则跳过
   // skip if no bounds or not enough points to calculate path curvature
   if (path.points.size() < 3 || path.left_bound.empty() || path.right_bound.empty()) return;
   autoware_utils::StopWatch<std::chrono::milliseconds> stop_watch;
@@ -432,6 +453,8 @@ void expand_drivable_area(
   add_bound_points(path.left_bound, path.right_bound, path_poses, params.min_bound_interval);
 
   stop_watch.tic("curvatures_expansion");
+
+  // 仅对新点添加曲率。重用路径点的曲率不会更新。
   // Only add curvatures for the new points. Curvatures of reused path points are not updated.
   try {
     if (path_poses.size() > curvatures.size()) {

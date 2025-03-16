@@ -45,7 +45,7 @@ namespace autoware::mission_planner_universe::lanelet2
 {
 
 // 初始化默认路径规划器的通用部分
-void DefaultPlanner::initialize_common(rclcpp::Node * node)
+void DefaultPlanner::RR(rclcpp::Node * node)
 {
   is_graph_ready_ = false; // 标记图未准备好
   node_ = node;
@@ -340,7 +340,7 @@ bool DefaultPlanner::is_goal_valid(
 // 规划路径
 PlannerPlugin::LaneletRoute DefaultPlanner::plan(const RoutePoints & points)
 {
-  const auto logger = node_->get_logger();
+  const auto logger = node_->get_logger();  // 获取日志记录器
 
   // 打印路径规划的点
   std::stringstream log_ss;
@@ -351,8 +351,8 @@ PlannerPlugin::LaneletRoute DefaultPlanner::plan(const RoutePoints & points)
     logger, "start planning route with check points: " << std::endl
                                                        << log_ss.str());
 
-  LaneletRoute route_msg;
-  RouteSections route_sections;
+  LaneletRoute route_msg; // 定义返回的路径消息
+  RouteSections route_sections; // 定义路径段集合
 
   lanelet::ConstLanelets all_route_lanelets;
   for (std::size_t i = 1; i < points.size(); i++) {

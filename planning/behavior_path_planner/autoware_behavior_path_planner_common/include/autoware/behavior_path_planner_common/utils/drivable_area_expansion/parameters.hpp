@@ -76,12 +76,12 @@ struct DrivableAreaExpansionParameters
   double dynamic_objects_extra_right_offset{};
   double dynamic_objects_extra_rear_offset{};
   double dynamic_objects_extra_front_offset{};
-  double max_expansion_distance{};
+  double max_expansion_distance{};  // 最大扩展距离
   double max_path_arc_length{};
   double resample_interval{};
   double arc_length_range{};
   double max_reuse_deviation{};
-  double min_bound_interval{};
+  double min_bound_interval{};  // 边界点最小间隔
   bool avoid_dynamic_objects{};
   bool print_runtime{};
   std::vector<std::string> avoid_linestring_types{};

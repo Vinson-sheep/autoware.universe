@@ -200,6 +200,7 @@ public:
    */
   void resetCurrentRouteLanelet(const std::shared_ptr<PlannerData> & data)
   {
+    // 直接使用当前最近lanelat
     lanelet::ConstLanelet ret{};
     data->route_handler->getClosestLaneletWithinRoute(data->self_odometry->pose.pose, &ret);
     *current_route_lanelet_ = ret;

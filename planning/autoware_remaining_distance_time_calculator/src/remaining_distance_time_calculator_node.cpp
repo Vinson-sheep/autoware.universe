@@ -32,6 +32,7 @@
 namespace autoware::remaining_distance_time_calculator
 {
 
+// 构造函数，初始化节点
 RemainingDistanceTimeCalculatorNode::RemainingDistanceTimeCalculatorNode(
   const rclcpp::NodeOptions & options)
 : Node("remaining_distance_time_calculator", options),
@@ -44,36 +45,45 @@ RemainingDistanceTimeCalculatorNode::RemainingDistanceTimeCalculatorNode(
 {
   using std::placeholders::_1;
 
+  // 订阅里程计消息
   sub_odometry_ = create_subscription<Odometry>(
     "~/input/odometry", 1, std::bind(&RemainingDistanceTimeCalculatorNode::on_odometry, this, _1));
 
   const auto qos_transient_local = rclcpp::QoS{1}.transient_local();
 
+  // 订阅地图消息
   sub_map_ = create_subscription<HADMapBin>(
     "~/input/map", qos_transient_local,
     std::bind(&RemainingDistanceTimeCalculatorNode::on_map, this, _1));
+  // 订阅路线消息
   sub_route_ = create_subscription<LaneletRoute>(
     "~/input/route", qos_transient_local,
     std::bind(&RemainingDistanceTimeCalculatorNode::on_route, this, _1));
+  // 订阅规划速度限制消息
   sub_planning_velocity_ = create_subscription<tier4_planning_msgs::msg::VelocityLimit>(
     "/planning/scenario_planning/current_max_velocity", qos_transient_local,
     std::bind(&RemainingDistanceTimeCalculatorNode::on_velocity_limit, this, _1));
+  // 订阅场景消息
   sub_scenario_ = this->create_subscription<autoware_internal_planning_msgs::msg::Scenario>(
     "~/input/scenario", 1, std::bind(&RemainingDistanceTimeCalculatorNode::on_scenario, this, _1));
 
+  // 发布剩余距离和时间消息
   pub_mission_remaining_distance_time_ = create_publisher<MissionRemainingDistanceTime>(
     "~/output/mission_remaining_distance_time",
     rclcpp::QoS(rclcpp::KeepLast(10)).durability_volatile().reliable());
 
+  // 声明更新率参数
   param_listener_ = std::make_shared<::remaining_distance_time_calculator::ParamListener>(
     this->get_node_parameters_interface());
   const auto param = param_listener_->get_params();
 
+  // 创建定时器
   const auto period_ns = rclcpp::Rate(param.update_rate).period();
   timer_ = rclcpp::create_timer(
     this, get_clock(), period_ns, std::bind(&RemainingDistanceTimeCalculatorNode::on_timer, this));
 }
 
+// 处理地图消息
 void RemainingDistanceTimeCalculatorNode::on_map(const HADMapBin::ConstSharedPtr & msg)
 {
   route_handler_.setMap(*msg);
@@ -85,18 +95,21 @@ void RemainingDistanceTimeCalculatorNode::on_map(const HADMapBin::ConstSharedPtr
   is_graph_ready_ = true;
 }
 
+// 处理里程计消息
 void RemainingDistanceTimeCalculatorNode::on_odometry(const Odometry::ConstSharedPtr & msg)
 {
   current_vehicle_pose_ = msg->pose.pose;
   current_vehicle_velocity_ = msg->twist.twist.linear;
 }
 
+// 处理路线消息
 void RemainingDistanceTimeCalculatorNode::on_route(const LaneletRoute::ConstSharedPtr & msg)
 {
   goal_pose_ = msg->goal_pose;
   has_received_route_ = true;
 }
 
+// 处理速度限制消息
 void RemainingDistanceTimeCalculatorNode::on_velocity_limit(
   const VelocityLimit::ConstSharedPtr & msg)
 {
@@ -112,6 +125,7 @@ void RemainingDistanceTimeCalculatorNode::on_scenario(
   has_received_scenario_ = true;
 }
 
+// 定时器回调函数
 void RemainingDistanceTimeCalculatorNode::on_timer()
 {
   if (!has_received_scenario_) {
@@ -130,6 +144,7 @@ void RemainingDistanceTimeCalculatorNode::on_timer()
   }
 }
 
+// 计算剩余距离
 void RemainingDistanceTimeCalculatorNode::calculate_remaining_distance()
 {
   size_t index = 0;
@@ -187,6 +202,7 @@ void RemainingDistanceTimeCalculatorNode::calculate_remaining_distance()
   }
 }
 
+// 计算剩余时间
 void RemainingDistanceTimeCalculatorNode::calculate_remaining_time()
 {
   if (velocity_limit_ > 0.0) {
@@ -194,6 +210,7 @@ void RemainingDistanceTimeCalculatorNode::calculate_remaining_time()
   }
 }
 
+// 发布剩余距离和时间消息
 void RemainingDistanceTimeCalculatorNode::publish_mission_remaining_distance_time()
 {
   MissionRemainingDistanceTime mission_remaining_distance_time;

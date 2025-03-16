@@ -52,6 +52,7 @@ class RTCInterface
 public:
   RTCInterface(rclcpp::Node * node, const std::string & name, const bool enable_rtc = true);
   void publishCooperateStatus(const rclcpp::Time & stamp);
+  // 更新协作状态
   void updateCooperateStatus(
     const UUID & uuid, const bool safe, const uint8_t state, const double start_distance,
     const double finish_distance, const rclcpp::Time & stamp, const bool requested = false);

@@ -35,6 +35,8 @@
 
 namespace autoware::behavior_path_planner
 {
+
+// PlannerManager 构造函数
 PlannerManager::PlannerManager(rclcpp::Node & node)
 : plugin_loader_(
     "autoware_behavior_path_planner",
@@ -42,18 +44,21 @@ PlannerManager::PlannerManager(rclcpp::Node & node)
   logger_(node.get_logger().get_child("planner_manager")),
   clock_(*node.get_clock())
 {
+  // 初始化当前路由车
   current_route_lanelet_ = std::make_shared<std::optional<lanelet::ConstLanelet>>(std::nullopt);
   processing_time_.emplace("total_time", 0.0);
   debug_publisher_ptr_ = std::make_unique<DebugPublisher>(&node, "~/debug");
   state_publisher_ptr_ = std::make_unique<DebugPublisher>(&node, "~/debug");
 }
 
+// 加载场景插件
 void PlannerManager::launchScenePlugin(rclcpp::Node & node, const std::string & name)
 {
-  if (plugin_loader_.isClassAvailable(name)) {
-    const auto plugin = plugin_loader_.createSharedInstance(name);
-    plugin->init(&node);
+  if (plugin_loader_.isClassAvailable(name)) {  // 检查插件是否可用
+    const auto plugin = plugin_loader_.createSharedInstance(name);  // 创建插件实例
+    plugin->init(&node);  // 初始化插件
 
+     // 检查插件是否已注册
     // Check if the plugin is already registered.
     for (const auto & running_plugin : manager_ptrs_) {
       if (plugin->name() == running_plugin->name()) {
@@ -62,35 +67,37 @@ void PlannerManager::launchScenePlugin(rclcpp::Node & node, const std::string & 
       }
     }
 
+    // 注册插件
     // register
-    manager_ptrs_.push_back(plugin);
-    processing_time_.emplace(plugin->name(), 0.0);
+    manager_ptrs_.push_back(plugin);  // 将插件添加到管理器列表
+    processing_time_.emplace(plugin->name(), 0.0);  // 初始化插件的处理时间
     RCLCPP_DEBUG_STREAM(node.get_logger(), "The scene plugin '" << name << "' is loaded.");
   } else {
     RCLCPP_ERROR_STREAM(node.get_logger(), "The scene plugin '" << name << "' is not available.");
   }
 }
 
+// 配置模块插槽
 void PlannerManager::configureModuleSlot(
   const std::vector<std::vector<std::string>> & slot_configuration)
 {
   std::unordered_map<std::string, SceneModuleManagerPtr> registered_modules;
   for (const auto & manager_ptr : manager_ptrs_) {
-    registered_modules[manager_ptr->name()] = manager_ptr;
+    registered_modules[manager_ptr->name()] = manager_ptr;  // 注册所有已加载的模块
   }
 
-  for (const auto & slot : slot_configuration) {
-    SubPlannerManager sub_manager(current_route_lanelet_, processing_time_, debug_info_);
-    for (const auto & module_name : slot) {
+  for (const auto & slot : slot_configuration) {  // 遍历插槽配置
+    SubPlannerManager sub_manager(current_route_lanelet_, processing_time_, debug_info_); // 创建子管理器
+    for (const auto & module_name : slot) { // 遍历插槽中的模块
       if (const auto it = registered_modules.find(module_name); it != registered_modules.end()) {
-        sub_manager.addSceneModuleManager(it->second);
+        sub_manager.addSceneModuleManager(it->second);  // 将模块添加到子管理器
       } else {
         // TODO(Mamoru Sobue): use LOG
         std::cout << module_name << " registered in slot_configuration is not registered, skipping"
                   << std::endl;
       }
     }
-    if (sub_manager.getSceneModuleManager().size() != 0) {
+    if (sub_manager.getSceneModuleManager().size() != 0) {   // 将子管理器添加到插槽列表
       planner_manager_slots_.push_back(sub_manager);
       // TODO(Mamoru Sobue): use LOG
       std::cout << "added a slot with " << sub_manager.getSceneModuleManager().size() << " modules"
@@ -99,25 +106,29 @@ void PlannerManager::configureModuleSlot(
   }
 }
 
+// 执行路径规划
 BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & data)
 {
-  resetProcessingTime();
-  StopWatch<std::chrono::milliseconds> stop_watch;
+  resetProcessingTime();  // 重置处理时间
+  StopWatch<std::chrono::milliseconds> stop_watch;  // 启动计时器
   stop_watch.tic("total_time");
   BOOST_SCOPE_EXIT((&processing_time_)(&stop_watch))
   {
-    processing_time_.at("total_time") += stop_watch.toc("total_time", true);
+    processing_time_.at("total_time") += stop_watch.toc("total_time", true);  // 记录总处理时间
   }
   BOOST_SCOPE_EXIT_END;
 
-  debug_info_.scene_status.clear();
+  debug_info_.scene_status.clear(); // 清空调试信息
   debug_info_.slot_status.clear();
 
+  // 重置当前路由车道 (取最近车道)
   if (!current_route_lanelet_->has_value()) resetCurrentRouteLanelet(data);
 
+  // 为场景模块注入数据
   std::for_each(
     manager_ptrs_.begin(), manager_ptrs_.end(), [&data](const auto & m) { m->setData(data); });
 
+  // 检查是否有已批准模块正在运行
   const bool is_any_approved_module_running = std::any_of(
     planner_manager_slots_.begin(), planner_manager_slots_.end(), [&](const auto & slot) {
       return slot.isAnyApprovedPred([](const auto & m) {
@@ -126,6 +137,7 @@ BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & da
       });
     });
 
+  // 检查是否有候选模块正在运行或空闲
   // IDLE is a state in which an execution has been requested but not yet approved.
   // once approved, it basically turns to running.
   const bool is_any_candidate_module_running_or_idle = std::any_of(
@@ -137,64 +149,75 @@ BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & da
       });
     });
 
+  // 检查是否有模块正在运行
   const bool is_any_module_running =
     is_any_approved_module_running || is_any_candidate_module_running_or_idle;
 
+  // 更新当前路由车道
   updateCurrentRouteLanelet(data, is_any_approved_module_running);
 
+  // 检查车辆是否超出路由范围
   const bool is_out_of_route = utils::isEgoOutOfRoute(
     data->self_odometry->pose.pose, current_route_lanelet_->value(), data->prev_modified_goal,
-    data->route_handler);
+    data->route_handler); 
 
+  // 如果没有模块运行且车辆超出路由范围
   if (!is_any_module_running && is_out_of_route) {
+    // 生成在目标点附近的刹车路径
     BehaviorModuleOutput result_output = utils::createGoalAroundPath(data);
     RCLCPP_WARN_THROTTLE(
       logger_, clock_, 5000,
       "Ego is out of route, no module is running. Skip running scene modules.");
-    generateCombinedDrivableArea(result_output, data);
+    generateCombinedDrivableArea(result_output, data);  // 生成可行驶区域
     return result_output;
   }
 
+  // 
   SlotOutput result_output = SlotOutput{
-    getReferencePath(data),
+    getReferencePath(data), // 获取参考路径
     false,
     false,
     false,
   };
 
+  // 遍历所有插槽
   for (auto & planner_manager_slot : planner_manager_slots_) {
     if (result_output.is_upstream_failed_approved) {
       // clear all candidate/approved modules of all subsequent slots, and keep result_output as is
-      planner_manager_slot.propagateWithFailedApproved();
+      planner_manager_slot.propagateWithFailedApproved(); // 传播失败状态
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_APPROVED_FAILED);
     } else if (result_output.is_upstream_waiting_approved) {
-      result_output = planner_manager_slot.propagateWithWaitingApproved(data, result_output);
+      result_output = planner_manager_slot.propagateWithWaitingApproved(data, result_output); // 传播等待批准状态
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_WAITING_APPROVED);
     } else if (result_output.is_upstream_candidate_exclusive) {
-      result_output = planner_manager_slot.propagateWithExclusiveCandidate(data, result_output);
+      result_output = planner_manager_slot.propagateWithExclusiveCandidate(data, result_output);  // 传播独占候选状态
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_EXCLUSIVE_CANDIDATE);
     } else {
-      result_output = planner_manager_slot.propagateFull(data, result_output);
+      result_output = planner_manager_slot.propagateFull(data, result_output);  // 正常传播
       debug_info_.slot_status.push_back(SlotStatus::NORMAL);
     }
   }
 
   std::for_each(manager_ptrs_.begin(), manager_ptrs_.end(), [](const auto & m) {
-    m->updateObserver();
-    m->publishRTCStatus();
+    m->updateObserver();  // 更新观察者
+    m->publishRTCStatus();  // 发布 RTC 状态
     m->publish_planning_factors();
   });
 
+  // 生成合并的可行驶区域
   generateCombinedDrivableArea(result_output.valid_output, data);
+  // 返回有效的路径规划结果
   return result_output.valid_output;
 }
 
+// 生成合并的可行驶区域
 // NOTE: To deal with some policies about drivable area generation, currently DrivableAreaInfo is
 // quite messy. Needs to be refactored.
 void PlannerManager::generateCombinedDrivableArea(
   BehaviorModuleOutput & output, const std::shared_ptr<PlannerData> & data) const
 {
-  if (output.path.points.empty()) {
+  // 检查路径是否为空
+  if (output.path.points.empty()) { 
     RCLCPP_ERROR_STREAM(logger_, "[generateCombinedDrivableArea] Output path is empty!");
     return;
   }
@@ -205,33 +228,35 @@ void PlannerManager::generateCombinedDrivableArea(
   const auto is_driving_forward_opt = autoware::motion_utils::isDrivingForward(output.path.points);
   const bool is_driving_forward = is_driving_forward_opt ? *is_driving_forward_opt : true;
 
+  // 如果存在可行驶区域边距
   if (epsilon < std::abs(di.drivable_margin)) {
     // for single free space pull over
     utils::generateDrivableArea(
-      output.path, data->parameters.vehicle_length, di.drivable_margin, is_driving_forward);
-  } else if (di.is_already_expanded) {
+      output.path, data->parameters.vehicle_length, di.drivable_margin, is_driving_forward);  // 生成可行驶区域
+  } else if (di.is_already_expanded) {  // 如果可行驶区域已扩展
     // for single side shift
     utils::generateDrivableArea(
       output.path, di.drivable_lanes, false, false, false, data, is_driving_forward);
   } else {
-    const auto shorten_lanes = utils::cutOverlappedLanes(output.path, di.drivable_lanes);
+    const auto shorten_lanes = utils::cutOverlappedLanes(output.path, di.drivable_lanes); // 裁剪重叠车道
 
     const auto & dp = data->drivable_area_expansion_parameters;
     const auto expanded_lanes = utils::expandLanelets(
       shorten_lanes, dp.drivable_area_left_bound_offset, dp.drivable_area_right_bound_offset,
-      dp.drivable_area_types_to_skip);
+      dp.drivable_area_types_to_skip);  // 扩展车道
 
     // for other modules where multiple modules may be launched
     utils::generateDrivableArea(
       output.path, expanded_lanes, di.enable_expanding_hatched_road_markings,
       di.enable_expanding_intersection_areas, di.enable_expanding_freespace_areas, data,
-      is_driving_forward);
+      is_driving_forward); // 生成可行驶区域
   }
 
   // extract obstacles from drivable area
-  utils::extractObstaclesFromDrivableArea(output.path, di.obstacles);
+  utils::extractObstaclesFromDrivableArea(output.path, di.obstacles);   // 从可行驶区域中提取障碍物
 }
 
+// 更新当前路由车道
 void PlannerManager::updateCurrentRouteLanelet(
   const std::shared_ptr<PlannerData> & data, const bool is_any_approved_module_running)
 {
@@ -245,37 +270,42 @@ void PlannerManager::updateCurrentRouteLanelet(
 
   lanelet::ConstLanelet closest_lane{};
 
+  // 如果当前lanelet就是最近的，直接使用
   if (route_handler->getClosestRouteLaneletFromLanelet(
         pose, current_route_lanelet_->value(), &closest_lane, p.ego_nearest_dist_threshold,
-        p.ego_nearest_yaw_threshold)) {
+        p.ego_nearest_yaw_threshold)) { // 获取最近的车道
     *current_route_lanelet_ = closest_lane;
     return;
   }
 
+  // 从后续的lanelat中选择最近的
   const auto lanelet_sequence = route_handler->getLaneletSequence(
-    current_route_lanelet_->value(), pose, backward_length, p.forward_path_length);
+    current_route_lanelet_->value(), pose, backward_length, p.forward_path_length); // 获取车道序列
 
   const auto could_calculate_closest_lanelet =
     lanelet::utils::query::getClosestLaneletWithConstrains(
       lanelet_sequence, pose, &closest_lane, p.ego_nearest_dist_threshold,
-      p.ego_nearest_yaw_threshold) ||
+      p.ego_nearest_yaw_threshold) || // 获取最近的车道
     lanelet::utils::query::getClosestLanelet(lanelet_sequence, pose, &closest_lane);
 
+  // 如果找到，直接使用
   if (could_calculate_closest_lanelet) {
     *current_route_lanelet_ = closest_lane;
   } else if (!is_any_approved_module_running) {
-    resetCurrentRouteLanelet(data);
+    resetCurrentRouteLanelet(data); // 重置当前路由车道
   }
 }
 
+// 获取参考路径
 BehaviorModuleOutput PlannerManager::getReferencePath(
   const std::shared_ptr<PlannerData> & data) const
 {
-  const auto reference_path = utils::getReferencePath(current_route_lanelet_->value(), data);
-  publishDebugRootReferencePath(reference_path);
+  const auto reference_path = utils::getReferencePath(current_route_lanelet_->value(), data); // 获取参考路径
+  publishDebugRootReferencePath(reference_path);  // 发布调试信息
   return reference_path;
 }
 
+// 发布调试参考路径
 void PlannerManager::publishDebugRootReferencePath(
   const BehaviorModuleOutput & reference_path) const
 {
@@ -292,9 +322,10 @@ void PlannerManager::publishDebugRootReferencePath(
   for (const auto & p : current_route_lanelet_->value().polygon3d().basicPolygon())
     m.points.emplace_back().set__x(p.x()).set__y(p.y()).set__z(p.z());
   array.markers.push_back(m);
-  debug_publisher_ptr_->publish<MarkerArray>("root_reference_path", array);
+  debug_publisher_ptr_->publish<MarkerArray>("root_reference_path", array); // 发布参考路径
 }
 
+// 检查是否有可重新路由的已批准模块
 bool PlannerManager::hasPossibleRerouteApprovedModules(
   const std::shared_ptr<PlannerData> & data) const
 {
@@ -312,6 +343,7 @@ bool PlannerManager::hasPossibleRerouteApprovedModules(
   return std::any_of(approved_module.begin(), approved_module.end(), not_possible_reroute_module);
 }
 
+// 打印规划器状态
 void PlannerManager::print() const
 {
   const auto approved_module_ptrs = approved_modules();
@@ -401,6 +433,7 @@ void PlannerManager::publishProcessingTime() const
   }
 }
 
+// 获取调试信息
 std::shared_ptr<SceneModuleVisitor> PlannerManager::getDebugMsg()
 {
   debug_msg_ptr_ = std::make_shared<SceneModuleVisitor>();

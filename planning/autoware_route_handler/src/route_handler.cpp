@@ -653,6 +653,7 @@ lanelet::ConstLanelets RouteHandler::getLaneletSequenceUpTo(
   return lanelet_sequence_backward;
 }
 
+// 此函数的目的就是为了获取指定车道的完整序列，可以获得当前位置的车道的前后完整序列。
 lanelet::ConstLanelets RouteHandler::getLaneletSequence(
   const lanelet::ConstLanelet & lanelet, const double backward_distance,
   const double forward_distance, const bool only_route_lanes) const
@@ -668,6 +669,7 @@ lanelet::ConstLanelets RouteHandler::getLaneletSequence(
     return lanelet_sequence;
   }
 
+  // 获取向前的车道序列
   const lanelet::ConstLanelets lanelet_sequence_forward = std::invoke([&]() {
     if (only_route_lanes) {
       return getLaneletSequenceAfter(lanelet, forward_distance, only_route_lanes);
@@ -676,6 +678,8 @@ lanelet::ConstLanelets RouteHandler::getLaneletSequence(
     }
     return lanelet::ConstLanelets{};
   });
+
+  // 获取向后的车道序列
   const lanelet::ConstLanelets lanelet_sequence_backward = std::invoke([&]() {
     const auto arc_coordinate = lanelet::utils::getArcCoordinates({lanelet}, current_pose);
     if (arc_coordinate.length < backward_distance) {
@@ -688,18 +692,20 @@ lanelet::ConstLanelets RouteHandler::getLaneletSequence(
     return lanelet::ConstLanelets{};
   });
 
-  // loop check
+  // 检查是否存在循环
   if (!lanelet_sequence_forward.empty() && !lanelet_sequence_backward.empty()) {
     if (lanelet_sequence_backward.back().id() == lanelet_sequence_forward.front().id()) {
       return lanelet_sequence_forward;
     }
   }
+
   lanelet_sequence.insert(
     lanelet_sequence.end(), lanelet_sequence_backward.begin(), lanelet_sequence_backward.end());
   lanelet_sequence.push_back(lanelet);
   lanelet_sequence.insert(
     lanelet_sequence.end(), lanelet_sequence_forward.begin(), lanelet_sequence_forward.end());
 
+  // 返回完整的车道序列
   return lanelet_sequence;
 }
 
@@ -1826,49 +1832,73 @@ bool RouteHandler::isRoadLanelet(const lanelet::ConstLanelet & lanelet) const
 lanelet::ConstLanelets RouteHandler::getPreviousLaneletSequence(
   const lanelet::ConstLanelets & lanelet_sequence) const
 {
+  // 定义一个容器来存储前一个车道序列
   lanelet::ConstLanelets previous_lanelet_sequence;
   if (lanelet_sequence.empty()) {
     return previous_lanelet_sequence;
   }
 
+  // 如果输入的车道序列为空，则直接返回空序列
   const auto & first_lane = lanelet_sequence.front();
+
+  // 如果第一个车道已经是起点车道，则无法继续向前追溯，直接返回空序列
   if (exists(start_lanelets_, first_lane)) {
     return previous_lanelet_sequence;
   }
 
+  // 获取第一个车道右侧的所有相邻车道
   auto right_relations =
     lanelet::utils::query::getAllNeighborsRight(routing_graph_ptr_, first_lane);
+  
+  // 遍历右侧相邻车道，尝试找到前一个车道序列
   for (const auto & right : right_relations) {
-    previous_lanelet_sequence = getLaneletSequenceUpTo(right);
-    if (!previous_lanelet_sequence.empty()) {
+    previous_lanelet_sequence = getLaneletSequenceUpTo(right);  // 获取该相邻车道的完整序列
+    if (!previous_lanelet_sequence.empty()) { // 如果找到非空序列，则返回
       return previous_lanelet_sequence;
     }
   }
 
+  // 获取第一个车道左侧的所有相邻车道
   auto left_relations = lanelet::utils::query::getAllNeighborsLeft(routing_graph_ptr_, first_lane);
+
+  // 遍历左侧相邻车道，尝试找到前一个车道序列
   for (const auto & left : left_relations) {
-    previous_lanelet_sequence = getLaneletSequenceUpTo(left);
-    if (!previous_lanelet_sequence.empty()) {
+    previous_lanelet_sequence = getLaneletSequenceUpTo(left); // 获取该相邻车道的完整序列
+    if (!previous_lanelet_sequence.empty()) { // 如果找到非空序列，则返回
       return previous_lanelet_sequence;
     }
   }
+
+  // 如果没有找到合适的前一个车道序列，则返回空序列
   return previous_lanelet_sequence;
 }
 
 lanelet::ConstLanelets RouteHandler::getNeighborsWithinRoute(
   const lanelet::ConstLanelet & lanelet) const
 {
+  // 获取指定车道的所有相邻车道
+  // 但这个函数实际上也只是做了一个容器转换，真正获取的是调用了lanelet::utils::query::getAllNeighbors函数。
+  // 这个函数也是是lanelet2库中的工具函数，用于查询车道的邻居关系。
   const lanelet::ConstLanelets neighbor_lanelets =
     lanelet::utils::query::getAllNeighbors(routing_graph_ptr_, lanelet);
+
+  // 定义一个容器来存储属于当前规划路径的相邻车道
   lanelet::ConstLanelets neighbors_within_route;
+
+  // 遍历所有相邻车道
   for (const auto & llt : neighbor_lanelets) {
+    // 检查当前相邻车道是否属于当前规划路径
     if (exists(route_lanelets_, llt)) {
+      // 如果属于，则将其添加到结果中
       neighbors_within_route.push_back(llt);
     }
   }
+
+  // 返回筛选后的相邻车道
   return neighbors_within_route;
 }
 
+// 根据起始点和目标点，规划路径，所规划出来的路径便是path_lanelets，它是从起点到终点，连续的路径段。
 bool RouteHandler::planPathLaneletsBetweenCheckpoints(
   const Pose & start_checkpoint, const Pose & goal_checkpoint,
   lanelet::ConstLanelets * path_lanelets, const bool consider_no_drivable_lanes) const
@@ -1877,8 +1907,14 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
   // all possible route later. It fails when the point is not located on any road lanelet (e.g. the
   // start point is located out of any lanelets or road_shoulder lanelet which is not contained in
   // road lanelet). In that case, find the closest lanelet instead (within some maximum range).
+
+  // 定义最大搜索范围，用于查找起点和终点附近的车道
   constexpr auto max_search_range = 20.0;
+
+  // 尝试获取起点处的道路车道
   auto start_lanelets = getRoadLaneletsAtPose(start_checkpoint);
+
+  // 如果起点不在任何道路车道上，则尝试在最大搜索范围内查找最近的车道
   lanelet::ConstLanelet start_lanelet;
   if (start_lanelets.empty()) {
     const lanelet::BasicPoint2d p(start_checkpoint.position.x, start_checkpoint.position.y);
@@ -1894,6 +1930,8 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
     if (lanelet::utils::query::getClosestLanelet(candidates, start_checkpoint, &start_lanelet))
       start_lanelets = {start_lanelet};
   }
+
+  // 如果仍然找不到起点车道，则返回错误
   if (start_lanelets.empty()) {
     RCLCPP_WARN_STREAM(
       logger_, "Failed to find current lanelet."
@@ -1903,7 +1941,7 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
     return false;
   }
 
-  // Find lanelets for goal point.
+  // 尝试获取终点处的道路车道
   lanelet::ConstLanelet goal_lanelet;
   const lanelet::BasicPoint2d p(goal_checkpoint.position.x, goal_checkpoint.position.y);
   const lanelet::BoundingBox2d bbox(
@@ -1957,22 +1995,29 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
     }
   }
 
+  // 定义变量以存储可能的路径和最短路径
   lanelet::Optional<lanelet::routing::Route> optional_route;
   lanelet::routing::LaneletPath shortest_path;
   bool is_route_found = false;
 
+  // 定义角度差异的最大值和阈值
   double smallest_angle_diff = std::numeric_limits<double>::max();
   constexpr double yaw_threshold = M_PI / 2.0;
 
   for (const auto & st_llt : start_lanelets) {
     // check if the angle difference between start_checkpoint and start lanelet center line
     // orientation is in yaw_threshold range
+    // 计算起点姿态与车道中心线方向之间的角度差异
     double lanelet_angle = lanelet::utils::getLaneletAngle(st_llt, start_checkpoint.position);
     double pose_yaw = tf2::getYaw(start_checkpoint.orientation);
     double angle_diff = std::abs(autoware_utils::normalize_radian(lanelet_angle - pose_yaw));
 
+    // 检查角度差异是否在允许范围内
     bool is_proper_angle = angle_diff <= std::abs(yaw_threshold);
 
+    // 使用路由图计算从起点车道到终点车道的路径
+    // 这个的是是在lanelet2库中实现的，这是一个外部依赖库。它位于lanelet2_routing包中。
+    // 这个函数是RoutingGraph类的成员函数，用于计算两个lanelet之间的路径。
     optional_route = routing_graph_ptr_->getRoute(st_llt, goal_lanelet, 0);
     if (!optional_route || !is_proper_angle) {
       RCLCPP_ERROR_STREAM(
@@ -1984,7 +2029,11 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
                    << " - goal lane id: " << goal_lanelet.id() << std::endl);
       continue;
     }
+
+    // 标记找到了合适的路径
     is_route_found = true;
+
+    // 如果找到了首选车道且与当前起点车道匹配，则直接选择该路径
     lanelet::ConstLanelet preferred_lane{};
     if (getClosestPreferredLaneletWithinRoute(start_checkpoint, &preferred_lane)) {
       if (st_llt.id() == preferred_lane.id()) {
@@ -1993,6 +2042,8 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
         break;
       }
     }
+
+    // 如果当前角度差异更小，则更新最短路径和起点车道
     if (angle_diff < smallest_angle_diff) {
       smallest_angle_diff = angle_diff;
       shortest_path = optional_route->shortestPath();
@@ -2000,8 +2051,10 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
     }
   }
 
+  // 如果找到了合适的路径，则进一步处理路径
   if (is_route_found) {
     lanelet::routing::LaneletPath path;
+    // 如果需要考虑不可行驶车道，则尝试查找可行驶的路径
     path = [&]() -> lanelet::routing::LaneletPath {
       if (consider_no_drivable_lanes && hasNoDrivableLaneInPath(shortest_path)) {
         const auto drivable_lane_path = findDrivableLanePath(start_lanelet, goal_lanelet);
@@ -2010,56 +2063,62 @@ bool RouteHandler::planPathLaneletsBetweenCheckpoints(
       return shortest_path;
     }();
 
+    // 将路径车道序列存储到输出参数中
     path_lanelets->reserve(path.size());
     for (const auto & llt : path) {
       path_lanelets->push_back(llt);
     }
   }
 
+  // 返回是否成功找到路径
   return is_route_found;
 }
 
+// 根据给定的车道序列（path_lanelets）创建地图段（LaneletSegment）
 std::vector<LaneletSegment> RouteHandler::createMapSegments(
   const lanelet::ConstLanelets & path_lanelets) const
 {
-  const auto main_path = getMainLanelets(path_lanelets);
+  const auto main_path = getMainLanelets(path_lanelets);  // 获取主车道序列
+  std::vector<LaneletSegment> route_sections; // 用于存储最终的地图段
 
-  std::vector<LaneletSegment> route_sections;
-
-  if (main_path.empty()) {
+  if (main_path.empty()) {  // 如果主车道序列为空，直接返回空结果
     return route_sections;
   }
 
-  route_sections.reserve(main_path.size());
-  for (const auto & main_llt : main_path) {
-    LaneletSegment route_section_msg;
+  route_sections.reserve(main_path.size()); // 预分配内存以提高效率
+  for (const auto & main_llt : main_path) { // 遍历每个主车道
+    LaneletSegment route_section_msg; // 获取当前主车道的相邻车道
     const lanelet::ConstLanelets route_section_lanelets = getNeighborsWithinRoute(main_llt);
-    route_section_msg.preferred_primitive.id = main_llt.id();
-    route_section_msg.primitives.reserve(route_section_lanelets.size());
-    for (const auto & section_llt : route_section_lanelets) {
-      LaneletPrimitive p;
-      p.id = section_llt.id();
-      p.primitive_type = "lane";
-      route_section_msg.primitives.push_back(p);
+    route_section_msg.preferred_primitive.id = main_llt.id(); // 设置首选车道ID
+    route_section_msg.primitives.reserve(route_section_lanelets.size());  // 预分配内存
+    for (const auto & section_llt : route_section_lanelets) { // 遍历相邻车道
+      LaneletPrimitive p; // 创建一个车道原语对象
+      p.id = section_llt.id();  // 设置车道ID
+      p.primitive_type = "lane";  // 设置车道类型为 "lane"
+      route_section_msg.primitives.push_back(p);  // 将车道原语添加到地图段中
     }
-    route_sections.push_back(route_section_msg);
+    route_sections.push_back(route_section_msg);   // 将当前地图段添加到结果列表中
   }
-  return route_sections;
+  return route_sections;  // 返回所有地图段
 }
 
 lanelet::ConstLanelets RouteHandler::getMainLanelets(
   const lanelet::ConstLanelets & path_lanelets) const
 {
+  // 从路径的最后一个车道开始获取车道序列
   auto lanelet_sequence = getLaneletSequence(path_lanelets.back());
 
+  // 打印调试信息
   RCLCPP_INFO_STREAM(logger_, "getMainLanelets: lanelet_sequence = " << lanelet_sequence);
 
   lanelet::ConstLanelets main_lanelets;
   while (!lanelet_sequence.empty()) {
+    // 将当前车道序列插入到主车道序列的开头
     main_lanelets.insert(main_lanelets.begin(), lanelet_sequence.begin(), lanelet_sequence.end());
+    // 获取前一个车道序列
     lanelet_sequence = getPreviousLaneletSequence(lanelet_sequence);
   }
-  return main_lanelets;
+  return main_lanelets; // 返回主车道序列
 }
 
 bool RouteHandler::isNoDrivableLane(const lanelet::ConstLanelet & llt)

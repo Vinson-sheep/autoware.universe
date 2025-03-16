@@ -61,8 +61,8 @@ enum Side { LEFT, RIGHT };
 struct Expansion
 {
   // mappings from bound index
-  std::vector<double> left_distances;
-  std::vector<double> right_distances;
+  std::vector<double> left_distances; // 左侧扩展距离
+  std::vector<double> right_distances;  // 右侧扩展距离
   // mappings from path index
   std::vector<size_t> left_bound_indexes;
   std::vector<PointDistance> left_projections;

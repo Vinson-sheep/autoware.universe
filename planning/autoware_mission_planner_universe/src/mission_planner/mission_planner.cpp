@@ -509,18 +509,30 @@ LaneletRoute MissionPlanner::create_route(
   const Header & header, const std::vector<Pose> & waypoints, const Pose & start_pose,
   const Pose & goal_pose, const UUID & uuid, const bool allow_goal_modification)
 {
+  // 创建路径点集合
   PlannerPlugin::RoutePoints points;
+
+  // 将当前车辆位置添加到路径点集合
   points.push_back(start_pose);
+
+  // 将路径点转换到统一的坐标系并添加到路径点集合
   for (const auto & waypoint : waypoints) {
     points.push_back(transform_pose(waypoint, header));
   }
+
+  // 将目标点转换到统一的坐标系并添加到路径点集合
   points.push_back(transform_pose(goal_pose, header));
 
+  // 调用路径规划器生成路径
   LaneletRoute route = planner_->plan(points);
-  route.header.stamp = header.stamp;
-  route.header.frame_id = map_frame_;
-  route.uuid = uuid;
-  route.allow_modification = allow_goal_modification;
+
+  // 设置路径的元数据
+  route.header.stamp = header.stamp;  // 设置时间戳
+  route.header.frame_id = map_frame_; // 设置帧ID
+  route.uuid = uuid;  // 设置路径的唯一标识符
+  route.allow_modification = allow_goal_modification; // 设置是否允许修改目标点
+
+  // 返回生成的路径
   return route;
 }
 

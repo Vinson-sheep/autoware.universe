@@ -67,12 +67,13 @@ using unique_identifier_msgs::msg::UUID;
 using visualization_msgs::msg::MarkerArray;
 using PlanResult = PathWithLaneId::SharedPtr;
 
+
 enum class ModuleStatus {
-  IDLE = 0,
-  RUNNING = 1,
-  WAITING_APPROVAL = 2,
-  SUCCESS = 3,
-  FAILURE = 4,
+  IDLE = 0, // 空闲状态
+  RUNNING = 1,  // 运行中
+  WAITING_APPROVAL = 2, // 等待批准
+  SUCCESS = 3,  // 成功完成
+  FAILURE = 4,  // 执行失败
 };
 
 class SceneModuleInterface
@@ -104,20 +105,25 @@ public:
   SceneModuleInterface & operator=(SceneModuleInterface &&) = delete;
   virtual ~SceneModuleInterface() = default;
 
+  // 更新模块参数
   virtual void updateModuleParams(const std::any & parameters) = 0;
 
+  // 访问者模式接口
   virtual void acceptVisitor(const std::shared_ptr<SceneModuleVisitor> & visitor) const = 0;
 
+  // 检查是否请求执行
   /**
    * @brief Return true if the module has request for execution (not necessarily feasible)
    */
   virtual bool isExecutionRequested() const = 0;
 
+  // 检查是否准备好执行
   /**
    * @brief Return true if the execution is available (e.g. safety check for lane change)
    */
   virtual bool isExecutionReady() const = 0;
 
+  // 更新规划所需数据
   /**
    * @brief update data for planning. Note that the call of this function does not mean
    *        that the module executed. It should only updates the data necessary for
@@ -125,12 +131,14 @@ public:
    */
   virtual void updateData() {}
 
+  // 执行后处理
   /**
    * @brief After executing run(), update the module-specific status and/or data used for internal
    *        processing that are not defined in ModuleStatus.
    */
   virtual void postProcess() {}
 
+  // 执行模块的主要逻辑
   /**
    * @brief Execute module. Once this function is executed,
    *        it will continue to run as long as it is in the RUNNING state.
@@ -162,11 +170,14 @@ public:
     print(magic_enum::enum_name(from), magic_enum::enum_name(current_state_));
   }
 
+  // 模块进入运行状态时调用
   /**
    * @brief Called on the first time when the module goes into RUNNING.
    */
   void onEntry();
 
+  
+  // 模块退出运行状态时调用
   /**
    * @brief Called when the module exit from RUNNING.
    */
@@ -597,8 +608,8 @@ protected:
     return std::abs(planner_data_->self_odometry->twist.twist.linear.x);
   }
 
+  // ROS2相关
   rclcpp::Logger logger_;
-
   rclcpp::Clock::SharedPtr clock_;
 
   std::shared_ptr<const PlannerData> planner_data_;
@@ -610,8 +621,10 @@ protected:
   PlanResult path_candidate_;
   PlanResult path_reference_;
 
+  // 运行时组件
   std::unordered_map<std::string, std::shared_ptr<RTCInterface>> rtc_interface_ptr_map_;
 
+  // 可视化组件
   std::unordered_map<std::string, std::shared_ptr<ObjectsOfInterestMarkerInterface>>
     objects_of_interest_marker_interface_ptr_map_;
 

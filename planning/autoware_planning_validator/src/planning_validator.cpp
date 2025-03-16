@@ -27,29 +27,41 @@ namespace autoware::planning_validator
 {
 using diagnostic_msgs::msg::DiagnosticStatus;
 
+// 规划验证器类的构造函数
 PlanningValidator::PlanningValidator(const rclcpp::NodeOptions & options)
-: Node("planning_validator", options)
+: Node("planning_validator", options) // 继承自rclcpp::Node类，节点名为“planning_validator”
 {
   using std::placeholders::_1;
 
+  // 创建订阅器，订阅输入轨迹话题
   sub_traj_ = create_subscription<Trajectory>(
     "~/input/trajectory", 1, std::bind(&PlanningValidator::onTrajectory, this, _1));
 
+  // 创建发布器，发布输出轨迹话题
   pub_traj_ = create_publisher<Trajectory>("~/output/trajectory", 1);
+  // 创建发布器，发布验证状态话题
   pub_status_ = create_publisher<PlanningValidatorStatus>("~/output/validation_status", 1);
+  // 创建发布器，发布可视化标记数组话题
   pub_markers_ = create_publisher<visualization_msgs::msg::MarkerArray>("~/output/markers", 1);
+  // 创建发布器，发布处理时间话题
   pub_processing_time_ms_ = create_publisher<Float64Stamped>("~/debug/processing_time_ms", 1);
 
+  // 创建调试标记发布器
   debug_pose_publisher_ = std::make_shared<PlanningValidatorDebugMarkerPublisher>(this);
 
+  // 设置参数
   setupParameters();
 
+  // 配置日志级别
   logger_configure_ = std::make_unique<autoware_utils::LoggerLevelConfigure>(this);
+  // 创建发布时间发布器
   published_time_publisher_ = std::make_unique<autoware_utils::PublishedTimePublisher>(this);
 }
 
+// 设置参数函数
 void PlanningValidator::setupParameters()
 {
+  // 获取无效轨迹处理类型参数
   const auto type = declare_parameter<int>("invalid_trajectory_handling_type");
   if (type == 0) {
     invalid_trajectory_handling_type_ = InvalidTrajectoryHandlingType::PUBLISH_AS_IT_IS;
@@ -61,10 +73,14 @@ void PlanningValidator::setupParameters()
     throw std::invalid_argument{
       "unsupported invalid_trajectory_handling_type (" + std::to_string(type) + ")"};
   }
+  // 获取是否发布诊断信息参数
   publish_diag_ = declare_parameter<bool>("publish_diag");
+  // 获取诊断错误计数阈值参数
   diag_error_count_threshold_ = declare_parameter<int>("diag_error_count_threshold");
+  // 获取是否在终端显示状态参数
   display_on_terminal_ = declare_parameter<bool>("display_on_terminal");
 
+  // 获取验证参数
   {
     auto & p = validation_params_;
     const std::string t = "thresholds.";
@@ -88,6 +104,7 @@ void PlanningValidator::setupParameters()
       declare_parameter<double>(ps + "forward_trajectory_length_margin");
   }
 
+  // 获取车辆信息
   try {
     vehicle_info_ = autoware::vehicle_info_utils::VehicleInfoUtils(*this).getVehicleInfo();
   } catch (...) {
@@ -97,24 +114,26 @@ void PlanningValidator::setupParameters()
   }
 }
 
+// 设置诊断信息函数
 void PlanningValidator::setStatus(
   DiagnosticStatusWrapper & stat, const bool & is_ok, const std::string & msg)
 {
   if (is_ok) {
-    stat.summary(DiagnosticStatus::OK, "validated.");
+    stat.summary(DiagnosticStatus::OK, "validated."); // 如果验证通过，设置状态为OK
   } else if (validation_status_.invalid_count < diag_error_count_threshold_) {
     const auto warn_msg = msg + " (invalid count is less than error threshold: " +
                           std::to_string(validation_status_.invalid_count) + " < " +
                           std::to_string(diag_error_count_threshold_) + ")";
-    stat.summary(DiagnosticStatus::WARN, warn_msg);
+    stat.summary(DiagnosticStatus::WARN, warn_msg); // 如果未超过错误阈值，设置状态为WARN
   } else {
-    stat.summary(DiagnosticStatus::ERROR, msg);
+    stat.summary(DiagnosticStatus::ERROR, msg); // 如果超过错误阈值，设置状态为ERROR
   }
 }
 
+// 设置诊断更新器函数
 void PlanningValidator::setupDiag()
 {
-  diag_updater_ = std::make_shared<Updater>(this);
+  diag_updater_ = std::make_shared<Updater>(this);  // 创建诊断更新器
   auto & d = diag_updater_;
   d->setHardwareID("planning_validator");
 
@@ -170,6 +189,7 @@ void PlanningValidator::setupDiag()
   });
 }
 
+// 检查数据是否准备好函数
 bool PlanningValidator::isDataReady()
 {
   const auto waiting = [this](const auto s) {
@@ -177,47 +197,48 @@ bool PlanningValidator::isDataReady()
     return false;
   };
 
-  if (!current_kinematics_) {
+  if (!current_kinematics_) { // 如果当前运动学数据未准备好，返回false
     return waiting("current_kinematics_");
   }
-  if (!current_trajectory_) {
+  if (!current_trajectory_) { // 如果当前轨迹数据未准备好，返回false
     return waiting("current_trajectory_");
   }
-  return true;
+  return true;  // 如果所有数据都准备好，返回true
 }
 
+// 轨迹回调函数
 void PlanningValidator::onTrajectory(const Trajectory::ConstSharedPtr msg)
 {
-  stop_watch_.tic(__func__);
+  stop_watch_.tic(__func__);  // 开始计时
 
-  current_trajectory_ = msg;
+  current_trajectory_ = msg;  // 更新当前轨迹
 
-  // receive data
+  // 接收数据
   current_kinematics_ = sub_kinematics_.take_data();
 
-  if (!isDataReady()) return;
+  if (!isDataReady()) return; // 如果数据未准备好，直接返回
 
   if (publish_diag_ && !diag_updater_) {
-    setupDiag();  // run setup after all data is ready.
-  }
+    setupDiag();  // 如果需要发布诊断信息且未初始化诊断更新器，则进行初始化
 
-  debug_pose_publisher_->clearMarkers();
+  debug_pose_publisher_->clearMarkers();  // 清除调试标记
 
-  validate(*current_trajectory_);
+  validate(*current_trajectory_); // 对当前轨迹进行验证
 
-  diag_updater_->force_update();
+  diag_updater_->force_update();  // 强制更新诊断信息
 
-  publishTrajectory();
+  publishTrajectory();  // 发布轨迹
 
-  // for debug
+  // 发布调试信息
   publishProcessingTime(stop_watch_.toc(__func__));
   publishDebugInfo();
   displayStatus();
 }
 
+// 发布轨迹函数
 void PlanningValidator::publishTrajectory()
 {
-  // Validation check is all green. Publish the trajectory.
+  // 如果验证通过，发布轨迹
   if (isAllValid(validation_status_)) {
     pub_traj_->publish(*current_trajectory_);
     published_time_publisher_->publish_if_subscribed(pub_traj_, current_trajectory_->header.stamp);
@@ -226,7 +247,7 @@ void PlanningValidator::publishTrajectory()
   }
 
   //  ----- invalid factor is found. Publish previous trajectory. -----
-
+  // 如果验证未通过，根据无效轨迹处理类型进行处理
   if (invalid_trajectory_handling_type_ == InvalidTrajectoryHandlingType::PUBLISH_AS_IT_IS) {
     pub_traj_->publish(*current_trajectory_);
     published_time_publisher_->publish_if_subscribed(pub_traj_, current_trajectory_->header.stamp);
@@ -249,7 +270,7 @@ void PlanningValidator::publishTrajectory()
     }
   }
 
-  // trajectory is not published.
+  // 如果没有有效的轨迹可供发布，输出错误信息
   RCLCPP_ERROR(
     get_logger(),
     "Invalid Trajectory detected, no valid trajectory found in the past. Trajectory is not "
@@ -257,37 +278,43 @@ void PlanningValidator::publishTrajectory()
   return;
 }
 
+// 发布处理时间函数
 void PlanningValidator::publishProcessingTime(const double processing_time_ms)
 {
   Float64Stamped msg{};
-  msg.stamp = this->now();
-  msg.data = processing_time_ms;
-  pub_processing_time_ms_->publish(msg);
+  msg.stamp = this->now();  // 设置时间戳
+  msg.data = processing_time_ms;  // 设置处理时间
+  pub_processing_time_ms_->publish(msg);   // 发布处理时间话题
 }
 
+// 发布调试信息函数
 void PlanningValidator::publishDebugInfo()
 {
-  validation_status_.stamp = get_clock()->now();
-  pub_status_->publish(validation_status_);
+  validation_status_.stamp = get_clock()->now();  // 更新验证状态时间戳
+  pub_status_->publish(validation_status_); // 发布验证状态话题
 
+  // 如果验证未通过，发布调试标记和警告信息
   if (!isAllValid(validation_status_)) {
     geometry_msgs::msg::Pose front_pose = current_kinematics_->pose.pose;
     shiftPose(front_pose, vehicle_info_.front_overhang_m + vehicle_info_.wheel_base_m);
     debug_pose_publisher_->pushVirtualWall(front_pose);
     debug_pose_publisher_->pushWarningMsg(front_pose, "INVALID PLANNING");
   }
-  debug_pose_publisher_->publish();
+  debug_pose_publisher_->publish(); // 发布调试标记
 }
 
+// 轨迹验证函数
 void PlanningValidator::validate(const Trajectory & trajectory)
 {
-  auto & s = validation_status_;
+  auto & s = validation_status_;  // 获取验证状态
 
+  // 定义终止验证的函数
   const auto terminateValidation = [&](const auto & ss) {
     RCLCPP_ERROR_STREAM(get_logger(), ss);
     s.invalid_count += 1;
   };
 
+  // 验证轨迹点数量
   s.is_valid_size = checkValidSize(trajectory);
   if (!s.is_valid_size) {
     return terminateValidation(
@@ -295,12 +322,14 @@ void PlanningValidator::validate(const Trajectory & trajectory)
       "). Stop validation process, raise an error.");
   }
 
+  // 验证轨迹值是否有效
   s.is_valid_finite_value = checkValidFiniteValue(trajectory);
   if (!s.is_valid_finite_value) {
     return terminateValidation(
       "trajectory has invalid value (NaN, Inf, etc). Stop validation process, raise an error.");
   }
 
+  // 验证轨迹间隔
   s.is_valid_interval = checkValidInterval(trajectory);
   s.is_valid_longitudinal_max_acc = checkValidMaxLongitudinalAcceleration(trajectory);
   s.is_valid_longitudinal_min_acc = checkValidMinLongitudinalAcceleration(trajectory);
@@ -309,8 +338,7 @@ void PlanningValidator::validate(const Trajectory & trajectory)
   s.is_valid_longitudinal_distance_deviation = checkValidLongitudinalDistanceDeviation(trajectory);
   s.is_valid_forward_trajectory_length = checkValidForwardTrajectoryLength(trajectory);
 
-  // use resampled trajectory because the following metrics can not be evaluated for closed points.
-  // Note: do not interpolate to keep original trajectory shape.
+  // 对轨迹进行重采样，以便计算相对角度、曲率等指标
   constexpr auto min_interval = 1.0;
   const auto resampled = resampleTrajectory(trajectory, min_interval);
 
@@ -320,40 +348,45 @@ void PlanningValidator::validate(const Trajectory & trajectory)
   s.is_valid_steering = checkValidSteering(resampled);
   s.is_valid_steering_rate = checkValidSteeringRate(resampled);
 
+  // 更新无效计数
   s.invalid_count = isAllValid(s) ? 0 : s.invalid_count + 1;
 }
 
+// 检查轨迹点数量是否有效函数
 bool PlanningValidator::checkValidSize(const Trajectory & trajectory)
 {
-  validation_status_.trajectory_size = trajectory.points.size();
-  return trajectory.points.size() >= 2;
+  validation_status_.trajectory_size = trajectory.points.size();  // 更新轨迹点数量
+  return trajectory.points.size() >= 2; // 判断轨迹点数量是否大于等于2
 }
 
+// 检查轨迹值是否有效函数
 bool PlanningValidator::checkValidFiniteValue(const Trajectory & trajectory)
 {
-  for (const auto & p : trajectory.points) {
-    if (!checkFinite(p)) return false;
+  for (const auto & p : trajectory.points) {  
+    if (!checkFinite(p)) return false;  // 如果存在无效值，返回false
   }
-  return true;
+  return true;  // 如果所有值都有效，返回true
 }
 
+// 检查轨迹间隔是否有效函数
 bool PlanningValidator::checkValidInterval(const Trajectory & trajectory)
 {
-  const auto [max_interval_distance, i] = calcMaxIntervalDistance(trajectory);
-  validation_status_.max_interval_distance = max_interval_distance;
+  const auto [max_interval_distance, i] = calcMaxIntervalDistance(trajectory);  // 计算最大间隔距离
+  validation_status_.max_interval_distance = max_interval_distance; // 更新最大间隔距离
 
-  if (max_interval_distance > validation_params_.interval_threshold) {
+  if (max_interval_distance > validation_params_.interval_threshold) {  // 判断是否超过阈值
     if (i > 0) {
-      const auto & p = trajectory.points;
+      const auto & p = trajectory.points; 
       debug_pose_publisher_->pushPoseMarker(p.at(i - 1), "trajectory_interval");
       debug_pose_publisher_->pushPoseMarker(p.at(i), "trajectory_interval");
     }
-    return false;
+    return false; // 如果超过阈值，返回false
   }
 
-  return true;
+  return true;  // 如果未超过阈值，返回true
 }
 
+// 检查相对角度是否有效函数
 bool PlanningValidator::checkValidRelativeAngle(const Trajectory & trajectory)
 {
   const auto [max_relative_angle, i] = calcMaxRelativeAngles(trajectory);
@@ -371,6 +404,7 @@ bool PlanningValidator::checkValidRelativeAngle(const Trajectory & trajectory)
   return true;
 }
 
+// 检查曲率是否有效函数
 bool PlanningValidator::checkValidCurvature(const Trajectory & trajectory)
 {
   const auto [max_curvature, i] = calcMaxCurvature(trajectory);
@@ -387,6 +421,7 @@ bool PlanningValidator::checkValidCurvature(const Trajectory & trajectory)
   return true;
 }
 
+// 检查横向加速度是否有效函数
 bool PlanningValidator::checkValidLateralAcceleration(const Trajectory & trajectory)
 {
   const auto [max_lateral_acc, i] = calcMaxLateralAcceleration(trajectory);
@@ -398,6 +433,7 @@ bool PlanningValidator::checkValidLateralAcceleration(const Trajectory & traject
   return true;
 }
 
+// 检查纵向最小加速度是否有效函数
 bool PlanningValidator::checkValidMinLongitudinalAcceleration(const Trajectory & trajectory)
 {
   const auto [min_longitudinal_acc, i] = getMinLongitudinalAcc(trajectory);
@@ -410,6 +446,7 @@ bool PlanningValidator::checkValidMinLongitudinalAcceleration(const Trajectory &
   return true;
 }
 
+// 检查纵向最大加速度是否有效函数
 bool PlanningValidator::checkValidMaxLongitudinalAcceleration(const Trajectory & trajectory)
 {
   const auto [max_longitudinal_acc, i] = getMaxLongitudinalAcc(trajectory);
@@ -422,6 +459,7 @@ bool PlanningValidator::checkValidMaxLongitudinalAcceleration(const Trajectory &
   return true;
 }
 
+// 检查转向角是否有效函数
 bool PlanningValidator::checkValidSteering(const Trajectory & trajectory)
 {
   const auto [max_steering, i] = calcMaxSteeringAngles(trajectory, vehicle_info_.wheel_base_m);
@@ -434,6 +472,7 @@ bool PlanningValidator::checkValidSteering(const Trajectory & trajectory)
   return true;
 }
 
+// 检查转向率是否有效函数
 bool PlanningValidator::checkValidSteeringRate(const Trajectory & trajectory)
 {
   const auto [max_steering_rate, i] = calcMaxSteeringRates(trajectory, vehicle_info_.wheel_base_m);
@@ -446,6 +485,7 @@ bool PlanningValidator::checkValidSteeringRate(const Trajectory & trajectory)
   return true;
 }
 
+// 检查速度偏差是否有效函数
 bool PlanningValidator::checkValidVelocityDeviation(const Trajectory & trajectory)
 {
   // TODO(horibe): set appropriate thresholds for index search
@@ -462,6 +502,7 @@ bool PlanningValidator::checkValidVelocityDeviation(const Trajectory & trajector
   return true;
 }
 
+// 检查距离偏差是否有效函数
 bool PlanningValidator::checkValidDistanceDeviation(const Trajectory & trajectory)
 {
   // TODO(horibe): set appropriate thresholds for index search
@@ -477,73 +518,76 @@ bool PlanningValidator::checkValidDistanceDeviation(const Trajectory & trajector
   return true;
 }
 
+// 检查纵向距离偏差是否有效函数
 bool PlanningValidator::checkValidLongitudinalDistanceDeviation(const Trajectory & trajectory)
 {
   if (trajectory.points.size() < 2) {
     RCLCPP_ERROR(get_logger(), "Trajectory size is invalid to calculate distance deviation.");
-    return false;
+    return false; // 如果轨迹点数量小于2，返回false
   }
 
-  const auto ego_pose = current_kinematics_->pose.pose;
+  const auto ego_pose = current_kinematics_->pose.pose; // 获取当前车辆姿态
   const size_t idx =
-    autoware::motion_utils::findFirstNearestIndexWithSoftConstraints(trajectory.points, ego_pose);
+    autoware::motion_utils::findFirstNearestIndexWithSoftConstraints(trajectory.points, ego_pose);  // 查找最近点索引
 
   if (0 < idx && idx < trajectory.points.size() - 1) {
-    return true;  // ego-nearest point exists between trajectory points.
+    return true;  // 如果最近点在轨迹中间，返回true
   }
 
-  // Check if the valid longitudinal deviation for given segment index
+  // 检查纵向距离偏差是否有效
   const auto HasValidLongitudinalDeviation = [&](const size_t seg_idx, const bool is_last) {
     auto long_offset = autoware::motion_utils::calcLongitudinalOffsetToSegment(
-      trajectory.points, seg_idx, ego_pose.position);
+      trajectory.points, seg_idx, ego_pose.position); // 计算纵向偏移量
 
-    // for last, need to remove distance for the last segment.
+    // 如果是最后一个点，需要减去最后一个线段的长度
     if (is_last) {
       const auto size = trajectory.points.size();
       long_offset -= autoware_utils::calc_distance2d(
         trajectory.points.at(size - 1), trajectory.points.at(size - 2));
     }
 
-    validation_status_.longitudinal_distance_deviation = long_offset;
+    validation_status_.longitudinal_distance_deviation = long_offset; // 更新纵向距离偏差
     return std::abs(validation_status_.longitudinal_distance_deviation) <
-           validation_params_.longitudinal_distance_deviation_threshold;
+           validation_params_.longitudinal_distance_deviation_threshold;  // 判断是否超过阈值
   };
 
-  // Make sure the trajectory is far AHEAD from ego.
+  // 检查轨迹是否在车辆前方
   if (idx == 0) {
     const auto seg_idx = 0;
     return HasValidLongitudinalDeviation(seg_idx, false);
   }
 
-  // Make sure the trajectory is far BEHIND from ego.
+  // 检查轨迹是否在车辆后方
   if (idx == trajectory.points.size() - 1) {
     const auto seg_idx = trajectory.points.size() - 2;
     return HasValidLongitudinalDeviation(seg_idx, true);
   }
 
-  return true;
+  return true;  // 如果轨迹在车辆前后，返回true
 }
 
+// 检查前向轨迹长度是否有效函数
 bool PlanningValidator::checkValidForwardTrajectoryLength(const Trajectory & trajectory)
 {
-  const auto ego_speed = std::abs(current_kinematics_->twist.twist.linear.x);
+  const auto ego_speed = std::abs(current_kinematics_->twist.twist.linear.x); // 获取当前车辆速度
   if (ego_speed < 1.0 / 3.6) {
-    return true;  // Ego is almost stopped.
+    return true;  // 如果车辆几乎停止，返回true
   }
 
   const auto forward_length = autoware::motion_utils::calcSignedArcLength(
-    trajectory.points, current_kinematics_->pose.pose.position, trajectory.points.size() - 1);
+    trajectory.points, current_kinematics_->pose.pose.position, trajectory.points.size() - 1);  // 计算前向轨迹长度
 
-  const auto acc = validation_params_.forward_trajectory_length_acceleration;
+  const auto acc = validation_params_.forward_trajectory_length_acceleration; // 获取加速度参数
   const auto forward_length_required = ego_speed * ego_speed / (2.0 * std::abs(acc)) -
-                                       validation_params_.forward_trajectory_length_margin;
+                                       validation_params_.forward_trajectory_length_margin; // 计算所需前向轨迹长度
 
-  validation_status_.forward_trajectory_length_required = forward_length_required;
-  validation_status_.forward_trajectory_length_measured = forward_length;
+  validation_status_.forward_trajectory_length_required = forward_length_required;  // 更新所需前向轨迹长度
+  validation_status_.forward_trajectory_length_measured = forward_length; // 更新实际前向轨迹长度
 
-  return forward_length > forward_length_required;
+  return forward_length > forward_length_required;  // 判断实际长度是否大于所需长度
 }
 
+// 检查所有验证状态是否通过函数
 bool PlanningValidator::isAllValid(const PlanningValidatorStatus & s) const
 {
   return s.is_valid_size && s.is_valid_finite_value && s.is_valid_interval &&
@@ -551,13 +595,15 @@ bool PlanningValidator::isAllValid(const PlanningValidatorStatus & s) const
          s.is_valid_longitudinal_max_acc && s.is_valid_longitudinal_min_acc &&
          s.is_valid_steering && s.is_valid_steering_rate && s.is_valid_velocity_deviation &&
          s.is_valid_distance_deviation && s.is_valid_longitudinal_distance_deviation &&
-         s.is_valid_forward_trajectory_length;
+         s.is_valid_forward_trajectory_length;   // 检查所有验证状态是否都通过
 }
 
+// 显示状态函数
 void PlanningValidator::displayStatus()
 {
-  if (!display_on_terminal_) return;
+  if (!display_on_terminal_) return;  // 如果未启用终端显示，直接返回
 
+  // 定义警告函数
   const auto warn = [this](const bool status, const std::string & msg) {
     if (!status) {
       RCLCPP_WARN(get_logger(), "%s", msg.c_str());

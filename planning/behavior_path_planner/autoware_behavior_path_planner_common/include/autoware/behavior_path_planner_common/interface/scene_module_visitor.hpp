@@ -34,16 +34,20 @@ using tier4_planning_msgs::msg::AvoidanceDebugMsg;
 using tier4_planning_msgs::msg::AvoidanceDebugMsgArray;
 using DebugStringMsg = autoware_internal_debug_msgs::msg::StringStamped;
 
+// 场景访问器（Scene Module Visitor）是基于访问者模式设计的一个组件，用于访问和处理不同类型的场景模块。
 class SceneModuleVisitor
 {
 public:
+  // 访问避障模块
   void visitAvoidanceModule(const StaticObstacleAvoidanceModule * module) const;
+  // 获取避障模块调试信息
   void visitStartPlannerModule(const StartPlannerModule * module) const;
 
   std::shared_ptr<AvoidanceDebugMsgArray> getAvoidanceModuleDebugMsg() const;
   std::shared_ptr<DebugStringMsg> getStartPlannerModuleDebugMsg() const;
 
 protected:
+  // 避障访问器存储的调试信息
   mutable std::shared_ptr<AvoidanceDebugMsgArray> avoidance_visitor_;
   mutable std::shared_ptr<DebugStringMsg> start_planner_visitor_;
 };

@@ -24,6 +24,7 @@
 namespace autoware::freespace_planner::utils
 {
 
+// 将轨迹转换为姿态数组
 PoseArray trajectory_to_pose_array(const Trajectory & trajectory)
 {
   PoseArray pose_array;
@@ -36,12 +37,14 @@ PoseArray trajectory_to_pose_array(const Trajectory & trajectory)
   return pose_array;
 }
 
+// 计算轨迹上某个姿态到最近点的距离
 double calc_distance_2d(const Trajectory & trajectory, const Pose & pose)
 {
   const auto idx = autoware::motion_utils::findNearestIndex(trajectory.points, pose.position);
   return autoware_utils::calc_distance2d(trajectory.points.at(idx), pose);
 }
 
+// 将姿态转换到新的坐标系
 Pose transform_pose(const Pose & pose, const TransformStamped & transform)
 {
   PoseStamped transformed_pose;
@@ -52,6 +55,7 @@ Pose transform_pose(const Pose & pose, const TransformStamped & transform)
   return transformed_pose.pose;
 }
 
+// 检查场景是否处于激活状态
 bool is_active(const Scenario::ConstSharedPtr & scenario)
 {
   if (!scenario) return false;
@@ -60,6 +64,7 @@ bool is_active(const Scenario::ConstSharedPtr & scenario)
   return std::find(std::begin(s), std::end(s), Scenario::PARKING) != std::end(s);
 }
 
+// 获取轨迹中反转点的索引
 std::vector<size_t> get_reversing_indices(const Trajectory & trajectory)
 {
   std::vector<size_t> indices;
@@ -76,6 +81,7 @@ std::vector<size_t> get_reversing_indices(const Trajectory & trajectory)
   return indices;
 }
 
+// 获取下一个目标点的索引
 size_t get_next_target_index(
   const size_t trajectory_size, const std::vector<size_t> & reversing_indices,
   const size_t current_target_index)
@@ -91,6 +97,7 @@ size_t get_next_target_index(
   return trajectory_size - 1;
 }
 
+// 获取部分轨迹
 Trajectory get_partial_trajectory(
   const Trajectory & trajectory, const size_t start_index, const size_t end_index,
   const rclcpp::Clock::SharedPtr clock)
@@ -104,7 +111,7 @@ Trajectory get_partial_trajectory(
     partial_trajectory.points.push_back(trajectory.points.at(i));
   }
 
-  // Modify velocity at start/end point
+  // 修改起始点和结束点的速度
   if (partial_trajectory.points.size() >= 2) {
     partial_trajectory.points.front().longitudinal_velocity_mps =
       partial_trajectory.points.at(1).longitudinal_velocity_mps;
@@ -116,6 +123,7 @@ Trajectory get_partial_trajectory(
   return partial_trajectory;
 }
 
+// 创建轨迹
 Trajectory create_trajectory(
   const PoseStamped & current_pose, const PlannerWaypoints & planner_waypoints,
   const double & velocity)
@@ -128,10 +136,10 @@ Trajectory create_trajectory(
 
     point.pose = awp.pose.pose;
 
-    point.pose.position.z = current_pose.pose.position.z;  // height = const
-    point.longitudinal_velocity_mps = velocity / 3.6;      // velocity = const
+    point.pose.position.z = current_pose.pose.position.z;  // 高度保持不变
+    point.longitudinal_velocity_mps = velocity / 3.6;      // 速度转换为米每秒
 
-    // switch sign by forward/backward
+    // 根据前进或后退切换速度符号
     point.longitudinal_velocity_mps = (awp.is_back ? -1 : 1) * point.longitudinal_velocity_mps;
 
     trajectory.points.push_back(point);
@@ -140,6 +148,7 @@ Trajectory create_trajectory(
   return trajectory;
 }
 
+// 创建停止轨迹
 Trajectory create_stop_trajectory(
   const PoseStamped & current_pose, const rclcpp::Clock::SharedPtr clock)
 {
@@ -156,6 +165,7 @@ Trajectory create_stop_trajectory(
   return create_trajectory(current_pose, waypoints, 0.0);
 }
 
+// 创建停止轨迹
 Trajectory create_stop_trajectory(const Trajectory & trajectory)
 {
   Trajectory stop_trajectory = trajectory;
@@ -165,6 +175,7 @@ Trajectory create_stop_trajectory(const Trajectory & trajectory)
   return stop_trajectory;
 }
 
+// 检查是否停止
 bool is_stopped(
   const std::deque<Odometry::ConstSharedPtr> & odom_buffer, const double th_stopped_velocity_mps)
 {
@@ -176,6 +187,7 @@ bool is_stopped(
   return true;
 }
 
+// 检查是否接近目标点
 bool is_near_target(const Pose & target_pose, const Pose & current_pose, const double th_distance_m)
 {
   const auto pose_dev = autoware_utils::calc_pose_deviation(target_pose, current_pose);

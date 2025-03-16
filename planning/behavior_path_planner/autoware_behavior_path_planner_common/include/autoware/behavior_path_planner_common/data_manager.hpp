@@ -48,6 +48,8 @@
 #include <utility>
 #include <vector>
 
+
+// data_manager.hpp 是整个行为路径规划器的核心数据管理模块，负责将各个模块串联起来:
 namespace autoware::behavior_path_planner
 {
 using autoware::route_handler::RouteHandler;
@@ -69,12 +71,14 @@ using lanelet::TrafficLight;
 using tier4_planning_msgs::msg::VelocityLimit;
 using unique_identifier_msgs::msg::UUID;
 
+// 定义带时间戳的交通信号结构体
 struct TrafficSignalStamped
 {
   builtin_interfaces::msg::Time stamp;
   TrafficLightGroup signal;
 };
 
+// 定义带时间戳的布尔值结构体
 struct BoolStamped
 {
   explicit BoolStamped(bool in_data) : data(in_data) {}
@@ -82,12 +86,14 @@ struct BoolStamped
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
 };
 
+// 定义带时间戳的模块名称结构体
 struct ModuleNameStamped
 {
   std::string module_name = "NONE";
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
 };
 
+// 定义可行驶车道结构体
 struct DrivableLanes
 {
   lanelet::ConstLanelet right_lane;
@@ -95,56 +101,59 @@ struct DrivableLanes
   lanelet::ConstLanelets middle_lanes;
 };
 
+// 定义可行驶区域信息结构体
 // NOTE: To deal with some policies about drivable area generation, currently DrivableAreaInfo is
 // quite messy. Needs to be refactored.
 struct DrivableAreaInfo
 {
   struct Obstacle
   {
-    geometry_msgs::msg::Pose pose;
-    autoware_utils::Polygon2d poly;
-    bool is_left{true};
+    geometry_msgs::msg::Pose pose;  // 障碍物位置
+    autoware_utils::Polygon2d poly; // 障碍物多边形
+    bool is_left{true}; // 是否在左侧
   };
-  std::vector<DrivableLanes> drivable_lanes{};
-  std::vector<Obstacle> obstacles{};  // obstacles to extract from the drivable area
-  bool enable_expanding_hatched_road_markings{false};
-  bool enable_expanding_intersection_areas{false};
-  bool enable_expanding_freespace_areas{false};
+  std::vector<DrivableLanes> drivable_lanes{};  // 可行驶车道列表
+  std::vector<Obstacle> obstacles{};  // obstacles to extract from the drivable area  // 障碍物列表
+  bool enable_expanding_hatched_road_markings{false}; // 是否扩展虚线道路标记
+  bool enable_expanding_intersection_areas{false};  // 是否扩展交叉口区域
+  bool enable_expanding_freespace_areas{false};     // 是否扩展自由空间区域
 
   // temporary only for pull over's freespace planning
-  double drivable_margin{0.0};
+  double drivable_margin{0.0};  // 可行驶区域的边距
 
   // temporary only for side shift
-  bool is_already_expanded{false};
+  bool is_already_expanded{false};  // 是否已经扩展
 };
 
+// 定义行为模块输出结构体
 struct BehaviorModuleOutput
 {
   BehaviorModuleOutput() = default;
 
   // path planed by module
-  PathWithLaneId path{};
+  PathWithLaneId path{};  // 模块规划的路径
 
   // reference path planed by module
-  PathWithLaneId reference_path{};
+  PathWithLaneId reference_path{};  // 模块规划的参考路径
 
-  TurnSignalInfo turn_signal_info{};
+  TurnSignalInfo turn_signal_info{};  // 转向信号信息
 
-  std::optional<PoseWithUuidStamped> modified_goal{};
+  std::optional<PoseWithUuidStamped> modified_goal{}; // 修改后的目标点
 
   // drivable area info to create drivable area
   // NOTE: Drivable area in the path is generated at last from drivable_area_info.
-  DrivableAreaInfo drivable_area_info;
+  DrivableAreaInfo drivable_area_info;  // 可行驶区域信息
 };
 
+// 定义候选输出结构体
 struct CandidateOutput
 {
   CandidateOutput() = default;
   explicit CandidateOutput(PathWithLaneId path) : path_candidate{std::move(path)} {}
-  PathWithLaneId path_candidate{};
-  double lateral_shift{0.0};
-  double start_distance_to_path_change{std::numeric_limits<double>::lowest()};
-  double finish_distance_to_path_change{std::numeric_limits<double>::lowest()};
+  PathWithLaneId path_candidate{};  // 候选路径
+  double lateral_shift{0.0};        // 横向偏移
+  double start_distance_to_path_change{std::numeric_limits<double>::lowest()};  // 路径变更起点距离
+  double finish_distance_to_path_change{std::numeric_limits<double>::lowest()}; // 路径变更终点距离
 };
 
 /**
@@ -158,19 +167,21 @@ struct PoseWithDetail
 };
 using PoseWithDetailOpt = std::optional<PoseWithDetail>;
 
+
+// 包含了规划所需的所有核心数据
 struct PlannerData
 {
-  Odometry::ConstSharedPtr self_odometry{};
-  AccelWithCovarianceStamped::ConstSharedPtr self_acceleration{};
-  PredictedObjects::ConstSharedPtr dynamic_object{};
-  OccupancyGrid::ConstSharedPtr occupancy_grid{};
-  OccupancyGrid::ConstSharedPtr costmap{};
-  LateralOffset::ConstSharedPtr lateral_offset{};
-  OperationModeState::ConstSharedPtr operation_mode{};
-  PathWithLaneId::SharedPtr prev_output_path{std::make_shared<PathWithLaneId>()};
+  Odometry::ConstSharedPtr self_odometry{}; // 自车里程计数据
+  AccelWithCovarianceStamped::ConstSharedPtr self_acceleration{}; // 自车加速度
+  PredictedObjects::ConstSharedPtr dynamic_object{};  // 动态物体信息
+  OccupancyGrid::ConstSharedPtr occupancy_grid{};     // 占用栅格地图
+  OccupancyGrid::ConstSharedPtr costmap{};            // 代价地图
+  LateralOffset::ConstSharedPtr lateral_offset{};     // 横向偏移
+  OperationModeState::ConstSharedPtr operation_mode{};  // 运行模式
+  PathWithLaneId::SharedPtr prev_output_path{std::make_shared<PathWithLaneId>()}; // 上一次输出的路径
   std::optional<PoseWithUuidStamped> prev_modified_goal{};
   std::optional<UUID> prev_route_id{};
-  std::shared_ptr<RouteHandler> route_handler{std::make_shared<RouteHandler>()};
+  std::shared_ptr<RouteHandler> route_handler{std::make_shared<RouteHandler>()};  // 路由处理器
   std::map<int64_t, TrafficSignalStamped> traffic_light_id_map;
   BehaviorPathPlannerParameters parameters{};
   autoware::behavior_path_planner::drivable_area_expansion::DrivableAreaExpansionParameters
@@ -181,11 +192,13 @@ struct PlannerData
   mutable std::vector<double> drivable_area_expansion_prev_curvatures{};
   mutable TurnSignalDecider turn_signal_decider;
 
+  // 初始化parameters
   void init_parameters(rclcpp::Node & node)
   {
     parameters.traffic_light_signal_timeout =
       node.declare_parameter<double>("traffic_light_signal_timeout");
 
+    // 车辆信息
     // vehicle info
     const auto vehicle_info = autoware::vehicle_info_utils::VehicleInfoUtils(node).getVehicleInfo();
     parameters.vehicle_info = vehicle_info;
@@ -200,6 +213,7 @@ struct PlannerData
     parameters.base_link2front = vehicle_info.max_longitudinal_offset_m;
     parameters.base_link2rear = parameters.rear_overhang;
 
+    // 计算后向路径长度
     // NOTE: backward_path_length is used not only calculating path length but also calculating the
     // size of a drivable area.
     //       The drivable area has to cover not the base link but the vehicle itself. Therefore
@@ -215,6 +229,7 @@ struct PlannerData
       node.declare_parameter<double>("backward_path_length") + backward_offset;
     parameters.forward_path_length = node.declare_parameter<double>("forward_path_length");
 
+    // 加速度参数
     // acceleration parameters
     parameters.min_acc = node.declare_parameter<double>("normal.min_acc");
     parameters.max_acc = node.declare_parameter<double>("normal.max_acc");
@@ -255,6 +270,7 @@ struct PlannerData
     drivable_area_expansion_parameters.init(node);
   }
 
+  // 获取转向灯信息
   std::pair<TurnSignalInfo, bool> getBehaviorTurnSignalInfo(
     const PathWithLaneId & path, const size_t shift_start_idx, const size_t shift_end_idx,
     const lanelet::ConstLanelets & current_lanelets, const double current_shift_length,
@@ -262,6 +278,7 @@ struct PlannerData
     const bool override_ego_stopped_check = false, const bool is_pull_out = false,
     const bool is_lane_change = false, const bool is_pull_over = false) const
   {
+    // 安全性检查
     if (shift_start_idx + 1 > path.points.size()) {
       RCLCPP_WARN(rclcpp::get_logger(__func__), "index inconsistency.");
       return std::make_pair(TurnSignalInfo{}, true);
@@ -276,6 +293,7 @@ struct PlannerData
     ShiftedPath shifted_path{path, lengths};
     ShiftLine shift_line;
 
+    // 计算shift_line
     {
       const auto start_pose = path.points.at(shift_start_idx).point.pose;
       const auto start_shift_length =
@@ -294,12 +312,14 @@ struct PlannerData
       shift_line.end_idx = shift_end_idx;
     }
 
+    // 获取转向灯信息
     return turn_signal_decider.getBehaviorTurnSignalInfo(
       shifted_path, shift_line, current_lanelets, route_handler, parameters, self_odometry,
       current_shift_length, is_driving_forward, egos_lane_is_shifted, override_ego_stopped_check,
       is_pull_out, is_lane_change, is_pull_over);
   }
 
+  // 获取转向灯信息？
   std::pair<TurnSignalInfo, bool> getBehaviorTurnSignalInfo(
     const ShiftedPath & path, const ShiftLine & shift_line,
     const lanelet::ConstLanelets & current_lanelets, const double current_shift_length,
@@ -312,6 +332,7 @@ struct PlannerData
       is_pull_out);
   }
 
+  // 根据位姿获取转向灯
   TurnIndicatorsCommand getTurnSignal(
     const PathWithLaneId & path, const TurnSignalInfo & turn_signal_info,
     TurnSignalDebugData & debug_data)
@@ -322,21 +343,26 @@ struct PlannerData
       route_handler, path, turn_signal_info, current_pose, current_vel, parameters, debug_data);
   }
 
+  // 获取交通信号灯
   std::optional<TrafficSignalStamped> getTrafficSignal(const int64_t id) const
   {
+    // 如果信号灯不存在
     if (traffic_light_id_map.count(id) == 0) {
       return std::nullopt;
     }
 
+    // 如果信号灯存在且没有超时
     const auto elapsed_time =
       (rclcpp::Clock{RCL_ROS_TIME}.now() - traffic_light_id_map.at(id).stamp).seconds();
     if (elapsed_time > parameters.traffic_light_signal_timeout) {
       return std::nullopt;
     }
 
+    // 返回信号灯指针
     return traffic_light_id_map.at(id);
   }
 
+  // 寻找最近的匹配点位置
   template <class T>
   size_t findEgoIndex(const std::vector<T> & points) const
   {
@@ -345,6 +371,7 @@ struct PlannerData
       parameters.ego_nearest_yaw_threshold);
   }
 
+  // 寻找最近的匹配点位置
   template <class T>
   size_t findEgoSegmentIndex(const std::vector<T> & points) const
   {

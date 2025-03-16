@@ -39,6 +39,7 @@
 
 namespace
 {
+// 移除尖锐点
 template <class T>
 std::vector<T> removeSharpPoints(const std::vector<T> & points)
 {
@@ -68,12 +69,14 @@ std::vector<T> removeSharpPoints(const std::vector<T> & points)
 
     constexpr double epsilon = 1e-3;
 
+    // 移除重叠点
     // Remove overlapped point.
     if (dist_1to2 < epsilon || dist_3to2 < epsilon) {
       itr = std::prev(ret.erase(itr));
       continue;
     }
 
+    // 如果点之间的角度小于45度，移除中间点
     // If the angle between the points is sharper than 45 degrees, remove the middle point.
     if (std::cos(M_PI_4) < product / dist_1to2 / dist_3to2 + epsilon) {
       itr = std::prev(ret.erase(itr));
@@ -633,6 +636,8 @@ std::vector<Point> updateBoundary(
 
 namespace autoware::behavior_path_planner::utils
 {
+
+// 获取第一个重叠的lane索引
 std::optional<size_t> getOverlappedLaneletId(const std::vector<DrivableLanes> & lanes)
 {
   auto overlaps = [](const DrivableLanes & lanes, const DrivableLanes & target_lanes) {
@@ -672,6 +677,7 @@ std::optional<size_t> getOverlappedLaneletId(const std::vector<DrivableLanes> & 
   return {};
 }
 
+// 参见lane
 std::vector<DrivableLanes> cutOverlappedLanes(
   PathWithLaneId & path, const std::vector<DrivableLanes> & lanes)
 {

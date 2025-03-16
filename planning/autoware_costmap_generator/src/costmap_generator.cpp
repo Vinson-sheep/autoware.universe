@@ -67,6 +67,7 @@
 namespace
 {
 
+// 获取当前姿态
 // Copied from scenario selector
 geometry_msgs::msg::PoseStamped::ConstSharedPtr getCurrentPose(
   const tf2_ros::Buffer & tf_buffer, const rclcpp::Logger & logger,
@@ -91,6 +92,7 @@ geometry_msgs::msg::PoseStamped::ConstSharedPtr getCurrentPose(
   return geometry_msgs::msg::PoseStamped::ConstSharedPtr(p);
 }
 
+// 查找最近的停车场
 // copied from scenario selector
 std::shared_ptr<lanelet::ConstPolygon3d> findNearestParkinglot(
   const std::shared_ptr<lanelet::LaneletMap> & lanelet_map_ptr,
@@ -106,6 +108,7 @@ std::shared_ptr<lanelet::ConstPolygon3d> findNearestParkinglot(
   return {};
 }
 
+// 判断是否在停车场内
 // copied from scenario selector
 bool isInParkingLot(
   const std::shared_ptr<lanelet::LaneletMap> & lanelet_map_ptr,
@@ -124,6 +127,7 @@ bool isInParkingLot(
   return lanelet::geometry::within(search_point, nearest_parking_lot->basicPolygon());
 }
 
+// 转换点云
 pcl::PointCloud<pcl::PointXYZ> getTransformedPointCloud(
   const sensor_msgs::msg::PointCloud2 & pointcloud_msg,
   const geometry_msgs::msg::Transform & transform)
@@ -139,6 +143,7 @@ pcl::PointCloud<pcl::PointXYZ> getTransformedPointCloud(
   return transformed_pointcloud;
 }
 
+// 转换多边形
 std::vector<geometry_msgs::msg::Polygon> getTransformedPrimitives(
   const std::vector<geometry_msgs::msg::Polygon> & in_polygons,
   const geometry_msgs::msg::TransformStamped & transform)
@@ -156,6 +161,8 @@ std::vector<geometry_msgs::msg::Polygon> getTransformedPrimitives(
 
 namespace autoware::costmap_generator
 {
+
+// 成本图生成器类
 CostmapGenerator::CostmapGenerator(const rclcpp::NodeOptions & node_options)
 : Node("costmap_generator", node_options), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_)
 {
@@ -163,11 +170,13 @@ CostmapGenerator::CostmapGenerator(const rclcpp::NodeOptions & node_options)
     this->get_node_parameters_interface());
   param_ = std::make_shared<::costmap_generator_node::Params>(param_listener_->get_params());
 
+  // 创建订阅者
   // Lanelet map subscriber
   sub_lanelet_bin_map_ = this->create_subscription<autoware_map_msgs::msg::LaneletMapBin>(
     "~/input/vector_map", rclcpp::QoS{1}.transient_local(),
     std::bind(&CostmapGenerator::onLaneletMapBin, this, std::placeholders::_1));
 
+  // 创建发布者
   // Publishers
   pub_costmap_ = this->create_publisher<grid_map_msgs::msg::GridMap>("~/output/grid_map", 1);
   pub_occupancy_grid_ =
@@ -179,15 +188,16 @@ CostmapGenerator::CostmapGenerator(const rclcpp::NodeOptions & node_options)
     this->create_publisher<autoware_internal_debug_msgs::msg::Float64Stamped>(
       "~/debug/processing_time_ms", 1);
 
-  // Timer
+  // 创建定时器
   const auto period_ns = rclcpp::Rate(param_->update_rate).period();
   timer_ =
     rclcpp::create_timer(this, get_clock(), period_ns, std::bind(&CostmapGenerator::onTimer, this));
 
-  // Initialize
+  // 初始化
   initGridmap();
 }
 
+// 从Lanelet地图加载道路区域
 void CostmapGenerator::loadRoadAreasFromLaneletMap(
   const lanelet::LaneletMapPtr lanelet_map,
   std::vector<geometry_msgs::msg::Polygon> & area_polygons)
@@ -208,6 +218,7 @@ void CostmapGenerator::loadRoadAreasFromLaneletMap(
   }
 }
 
+// 从Lanelet地图加载停车场区域
 void CostmapGenerator::loadParkingAreasFromLaneletMap(
   const lanelet::LaneletMapPtr lanelet_map,
   std::vector<geometry_msgs::msg::Polygon> & area_polygons)
@@ -232,6 +243,7 @@ void CostmapGenerator::loadParkingAreasFromLaneletMap(
   }
 }
 
+// 处理Lanelet地图二进制消息
 void CostmapGenerator::onLaneletMapBin(
   const autoware_map_msgs::msg::LaneletMapBin::ConstSharedPtr msg)
 {
@@ -247,6 +259,7 @@ void CostmapGenerator::onLaneletMapBin(
   }
 }
 
+// 更新数据
 void CostmapGenerator::update_data()
 {
   objects_ = sub_objects_.take_data();
@@ -254,11 +267,13 @@ void CostmapGenerator::update_data()
   scenario_ = sub_scenario_.take_data();
 }
 
+// 设置当前姿态
 void CostmapGenerator::set_current_pose()
 {
   current_pose_ = getCurrentPose(tf_buffer_, this->get_logger(), this->get_clock());
 }
 
+// 定时器回调函数
 void CostmapGenerator::onTimer()
 {
   update_data();
@@ -277,6 +292,7 @@ void CostmapGenerator::onTimer()
     return;
   }
 
+  // 获取当前姿态
   // Get current pose
   time_keeper_->start_track("lookupTransform");
   geometry_msgs::msg::TransformStamped tf;
@@ -289,6 +305,7 @@ void CostmapGenerator::onTimer()
   }
   time_keeper_->end_track("lookupTransform");
 
+  // 设置网格中心
   set_grid_center(tf);
 
   if ((param_->use_wayarea || param_->use_parkinglot) && lanelet_map_) {
@@ -325,6 +342,7 @@ void CostmapGenerator::set_grid_center(const geometry_msgs::msg::TransformStampe
   costmap_.setPosition(cur_pos + offset);
 }
 
+// 判断是否激活
 bool CostmapGenerator::isActive()
 {
   if (!lanelet_map_) {
@@ -343,6 +361,7 @@ bool CostmapGenerator::isActive()
   return isInParkingLot(lanelet_map_, current_pose_->pose);
 }
 
+// 初始化网格地图
 void CostmapGenerator::initGridmap()
 {
   costmap_.setFrameId(param_->costmap_frame);
@@ -356,6 +375,7 @@ void CostmapGenerator::initGridmap()
   costmap_.add(LayerName::combined, param_->grid_min_value);
 }
 
+// 生成点云成本图
 grid_map::Matrix CostmapGenerator::generatePointsCostmap(
   const sensor_msgs::msg::PointCloud2::ConstSharedPtr & in_points, const double vehicle_to_map_z)
 {
@@ -379,6 +399,7 @@ grid_map::Matrix CostmapGenerator::generatePointsCostmap(
   return points_costmap;
 }
 
+// 转换目标对象
 PredictedObjects::ConstSharedPtr transformObjects(
   const tf2_ros::Buffer & tf_buffer, const PredictedObjects::ConstSharedPtr in_objects,
   const std::string & target_frame_id, const std::string & src_frame_id)
@@ -405,6 +426,7 @@ PredictedObjects::ConstSharedPtr transformObjects(
   return PredictedObjects::ConstSharedPtr(objects);
 }
 
+// 生成目标对象成本图
 grid_map::Matrix CostmapGenerator::generateObjectsCostmap(
   const PredictedObjects::ConstSharedPtr in_objects)
 {
@@ -418,6 +440,7 @@ grid_map::Matrix CostmapGenerator::generateObjectsCostmap(
   return objects_costmap;
 }
 
+// 生成原始多边形成本图
 grid_map::Matrix CostmapGenerator::generatePrimitivesCostmap()
 {
   grid_map::GridMap lanelet2_costmap = costmap_;
@@ -443,6 +466,7 @@ grid_map::Matrix CostmapGenerator::generatePrimitivesCostmap()
   return lanelet2_costmap[LayerName::primitives];
 }
 
+// 生成综合成本图
 grid_map::Matrix CostmapGenerator::generateCombinedCostmap()
 {
   // assuming combined_costmap is calculated by element wise max operation
@@ -462,6 +486,8 @@ grid_map::Matrix CostmapGenerator::generateCombinedCostmap()
   return combined_costmap[LayerName::combined];
 }
 
+
+// 发布成本图
 void CostmapGenerator::publishCostmap(
   const grid_map::GridMap & costmap, const geometry_msgs::msg::TransformStamped & tf)
 {

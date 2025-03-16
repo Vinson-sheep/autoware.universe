@@ -40,7 +40,9 @@ struct ShiftLine
 {
   ShiftLine() : id(generate_uuid()) {}
 
+  // 起点标识
   Pose start{};  // shift start point in absolute coordinate
+  // 终点标识
   Pose end{};    // shift start point in absolute coordinate
 
   // relative shift length at the start point related to the reference path
@@ -49,7 +51,9 @@ struct ShiftLine
   // relative shift length at the end point related to the reference path
   double end_shift_length{};
 
+  // 偏移开始点索引
   size_t start_idx{};  // associated start-point index for the reference path
+  // 偏移结束点索引
   size_t end_idx{};    // associated end-point index for the reference path
 
   // for unique_id
@@ -59,7 +63,9 @@ using ShiftLineArray = std::vector<ShiftLine>;
 
 struct ShiftedPath
 {
+  // 偏移后的路径
   PathWithLaneId path{};
+  // 每个点的偏移量
   std::vector<double> shift_length{};
 };
 
@@ -68,6 +74,7 @@ enum class SHIFT_TYPE {
   SPLINE = 1,
 };
 
+// 处理路径偏移
 class PathShifter
 {
 public:
@@ -138,21 +145,26 @@ public:
   std::optional<ShiftLine> getLastShiftLine() const;
 
 private:
+  // 参考路径
   // The reference path along which the shift will be performed.
   PathWithLaneId reference_path_;
 
+  // 偏移线集合
   // Shift points used for shifted-path generation.
   ShiftLineArray shift_lines_;
 
   // The amount of shift length to the entire path.
   double base_offset_{0.0};
 
+  // 速度
   // Used to apply a lateral acceleration limit
   double velocity_{0.0};
 
+  // 横向加速度限制
   // lateral acceleration limit considered in the path planning
   double lateral_acc_limit_{-1.0};
 
+  // 纵向加速度
   double longitudinal_acc_{0.0};
 
   // Logger
