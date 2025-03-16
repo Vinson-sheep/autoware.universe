@@ -81,27 +81,32 @@ void PlannerManager::launchScenePlugin(rclcpp::Node & node, const std::string & 
 void PlannerManager::configureModuleSlot(
   const std::vector<std::vector<std::string>> & slot_configuration)
 {
+  // 创建已注册模块的映射
   std::unordered_map<std::string, SceneModuleManagerPtr> registered_modules;
   for (const auto & manager_ptr : manager_ptrs_) {
     registered_modules[manager_ptr->name()] = manager_ptr;  // 注册所有已加载的模块
   }
 
-  for (const auto & slot : slot_configuration) {  // 遍历插槽配置
-    SubPlannerManager sub_manager(current_route_lanelet_, processing_time_, debug_info_); // 创建子管理器
-    for (const auto & module_name : slot) { // 遍历插槽中的模块
+  // 为每个槽配置创建一个SubPlannerManager
+  for (const auto & slot : slot_configuration) {
+    SubPlannerManager sub_manager(current_route_lanelet_, processing_time_, debug_info_);
+    // 将配置中指定的模块添加到这个槽中
+    for (const auto & module_name : slot) {
       if (const auto it = registered_modules.find(module_name); it != registered_modules.end()) {
-        sub_manager.addSceneModuleManager(it->second);  // 将模块添加到子管理器
-      } else {
-        // TODO(Mamoru Sobue): use LOG
-        std::cout << module_name << " registered in slot_configuration is not registered, skipping"
-                  << std::endl;
-      }
+        sub_manager.addSceneModuleManager(it->second);
+      } 
+      // else {
+      //   // TODO(Mamoru Sobue): use LOG
+      //   std::cout << module_name << " registered in slot_configuration is not registered, skipping"
+      //             << std::endl;
+      // }
     }
-    if (sub_manager.getSceneModuleManager().size() != 0) {   // 将子管理器添加到插槽列表
+    // 如果槽中有模块，则添加到planner_manager_slots_中
+    if (sub_manager.getSceneModuleManager().size() != 0) {
       planner_manager_slots_.push_back(sub_manager);
       // TODO(Mamoru Sobue): use LOG
-      std::cout << "added a slot with " << sub_manager.getSceneModuleManager().size() << " modules"
-                << std::endl;
+      // std::cout << "added a slot with " << sub_manager.getSceneModuleManager().size() << " modules"
+      //           << std::endl;
     }
   }
 }
@@ -161,7 +166,7 @@ BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & da
     data->self_odometry->pose.pose, current_route_lanelet_->value(), data->prev_modified_goal,
     data->route_handler); 
 
-  // 如果没有模块运行且车辆超出路由范围
+  // 如果没有模块正在运行且车辆不在路径内，则跳过场景模块的运行
   if (!is_any_module_running && is_out_of_route) {
     // 生成在目标点附近的刹车路径
     BehaviorModuleOutput result_output = utils::createGoalAroundPath(data);
@@ -172,42 +177,45 @@ BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & da
     return result_output;
   }
 
-  // 
+  // 初始化结果输出
   SlotOutput result_output = SlotOutput{
     getReferencePath(data), // 获取参考路径
-    false,
-    false,
-    false,
+    false,  // 是否上游批准失败
+    false,  // 是否上游等待批准
+    false,  // 是否上游候选独占
   };
 
-  // 遍历所有插槽
+  // 逐个运行场景模块
   for (auto & planner_manager_slot : planner_manager_slots_) {
     if (result_output.is_upstream_failed_approved) {
-      // clear all candidate/approved modules of all subsequent slots, and keep result_output as is
-      planner_manager_slot.propagateWithFailedApproved(); // 传播失败状态
+      // 如果上游模块批准失败，则清除后续模块的候选/批准状态
+      planner_manager_slot.propagateWithFailedApproved();
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_APPROVED_FAILED);
     } else if (result_output.is_upstream_waiting_approved) {
-      result_output = planner_manager_slot.propagateWithWaitingApproved(data, result_output); // 传播等待批准状态
+      // 如果上游模块等待批准，则处理当前模块
+      result_output = planner_manager_slot.propagateWithWaitingApproved(data, result_output);
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_WAITING_APPROVED);
     } else if (result_output.is_upstream_candidate_exclusive) {
-      result_output = planner_manager_slot.propagateWithExclusiveCandidate(data, result_output);  // 传播独占候选状态
+      // 如果上游模块是候选独占，则处理当前模块
+      result_output = planner_manager_slot.propagateWithExclusiveCandidate(data, result_output);
       debug_info_.slot_status.push_back(SlotStatus::UPSTREAM_EXCLUSIVE_CANDIDATE);
     } else {
-      result_output = planner_manager_slot.propagateFull(data, result_output);  // 正常传播
+      // 正常运行当前模块
+      result_output = planner_manager_slot.propagateFull(data, result_output);
       debug_info_.slot_status.push_back(SlotStatus::NORMAL);
     }
   }
 
+  // 更新模块状态并发布 RTC 状态
   std::for_each(manager_ptrs_.begin(), manager_ptrs_.end(), [](const auto & m) {
-    m->updateObserver();  // 更新观察者
-    m->publishRTCStatus();  // 发布 RTC 状态
+    m->updateObserver();
+    m->publishRTCStatus();
     m->publish_planning_factors();
   });
 
   // 生成合并的可行驶区域
   generateCombinedDrivableArea(result_output.valid_output, data);
-  // 返回有效的路径规划结果
-  return result_output.valid_output;
+  return result_output.valid_output;  // 返回有效的路径规划结果
 }
 
 // 生成合并的可行驶区域
@@ -640,40 +648,42 @@ void SubPlannerManager::updateCandidateModules(
   sortByPriority(candidate_module_ptrs_);
 }
 
+// runRequestModules 函数：运行请求模块，并根据优先级选择一个模块的输出
 std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestModules(
   const std::vector<SceneModulePtr> & request_modules, const std::shared_ptr<PlannerData> & data,
   const BehaviorModuleOutput & previous_module_output)
 {
-  // modules that are filtered by simultaneous executable condition.
+  // 用于存储满足同时执行条件的模块
   std::vector<SceneModulePtr> executable_modules;
 
-  // modules that are not approved after running yet.
+  // 用于存储尚未获得批准的模块
   std::vector<SceneModulePtr> waiting_approved_modules;
 
-  // modules that are already approved after running.
+  // 用于存储已经获得批准的模块
   std::vector<SceneModulePtr> already_approved_modules;
 
-  // all request modules planning results.
+  // 用于存储所有请求模块的规划结果
   std::unordered_map<std::string, BehaviorModuleOutput> results;
 
   /**
-   * sort by priority. sorted_request_modules.front() is the highest priority module.
+   * 按优先级对请求模块进行排序。
+   * sorted_request_modules.front() 是优先级最高的模块。
    */
   auto sorted_request_modules = request_modules;
   sortByPriority(sorted_request_modules);
 
-  // the candidate module queue is either
-  // - consists of multiple simultaneous_executable_as_candidate modules only
-  // - consists of only 1 "not simultaneous_executable_as_candidate" module
+  // 候选模块队列的组成规则：
+  // - 仅包含多个满足同时执行条件的模块（SimultaneousExecutableAsCandidate）
+  // - 或者仅包含一个不满足同时执行条件的模块
   for (const auto & module_ptr : sorted_request_modules) {
-    // any module can join if executable_modules is empty
+    // 如果 executable_modules 为空，任何模块都可以加入
     const bool is_executable_modules_empty = executable_modules.empty();
     if (is_executable_modules_empty) {
       executable_modules.push_back(module_ptr);
       continue;
     }
 
-    // if executable_module is not empty, only SimultaneousExecutableAsCandidate is joinable
+    // 如果 executable_modules 不为空，只有满足同时执行条件的模块才能加入
     const bool is_this_cooperative =
       getManager(module_ptr)->isSimultaneousExecutableAsCandidateModule();
     const bool any_other_cooperative = std::any_of(
@@ -687,23 +697,26 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
   }
 
   /**
-   * run executable modules.
+   * 运行可执行模块。
    */
   for (const auto & module_ptr : executable_modules) {
     const auto & manager_ptr = getManager(module_ptr);
 
+    // 如果模块尚未注册，则注册新模块
     if (!manager_ptr->exist(module_ptr)) {
       manager_ptr->registerNewModule(
         std::weak_ptr<SceneModuleInterface>(module_ptr), previous_module_output);
     }
 
+    // 运行模块并存储结果
     results.emplace(module_ptr->name(), run(module_ptr, data, previous_module_output));
   }
 
   /**
-   * remove expired modules.
+   * 删除过期的模块。
    */
   {
+    // 定义删除过期模块的逻辑
     const auto remove_expired_modules = [this](auto & m) {
       if (m->getCurrentStatus() == ModuleStatus::FAILURE) {
         deleteExpiredModules(m);
@@ -718,16 +731,19 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
       return false;
     };
 
+    // 删除 executable_modules 中的过期模块
     executable_modules.erase(
       std::remove_if(executable_modules.begin(), executable_modules.end(), remove_expired_modules),
       executable_modules.end());
 
+
+    // 更新所有管理器的观察者
     std::for_each(
       manager_ptrs_.begin(), manager_ptrs_.end(), [](const auto & m) { m->updateObserver(); });
   }
 
   /**
-   * return null data if valid candidate module doesn't exist.
+   * 如果没有有效的候选模块，则返回空数据。
    */
   if (executable_modules.empty()) {
     clearCandidateModules();
@@ -735,7 +751,9 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
   }
 
   /**
-   * separate by approve condition.
+   * 根据批准条件将模块分为两类：
+   * - 等待批准的模块
+   * - 已批准的模块
    */
   std::for_each(executable_modules.begin(), executable_modules.end(), [&](const auto & m) {
     if (m->isWaitingApproval()) {
@@ -746,17 +764,20 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
   });
 
   /**
-   * choice highest priority module.
+   * 选择优先级最高的模块。
    */
   const auto module_ptr = [&]() -> SceneModulePtr {
     if (!already_approved_modules.empty()) {
+      // 如果有已批准的模块，选择优先级最高的已批准模块
       return selectHighestPriorityModule(already_approved_modules);
     }
 
     if (!waiting_approved_modules.empty()) {
+      // 如果有等待批准的模块，选择优先级最高的等待批准模块
       return selectHighestPriorityModule(waiting_approved_modules);
     }
 
+    // 如果没有模块，返回 nullptr
     return nullptr;
   }();
   if (module_ptr == nullptr) {
@@ -764,34 +785,49 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
   }
 
   /**
-   * register candidate modules.
+   * 注册候选模块。
    */
   updateCandidateModules(executable_modules, module_ptr);
 
+  // 返回优先级最高的模块及其输出
   return std::make_pair(module_ptr, results.at(module_ptr->name()));
 }
 
+// SubPlannerManager 的 run 函数：运行一个场景模块并返回其输出结果
 BehaviorModuleOutput SubPlannerManager::run(
   const SceneModulePtr & module_ptr, const std::shared_ptr<PlannerData> & planner_data,
   const BehaviorModuleOutput & previous_module_output) const
 {
+  // 创建一个用于测量时间的计时器，单位为毫秒
   StopWatch<std::chrono::milliseconds> stop_watch;
+  // 开始计时，并以模块名称作为计时标签
   stop_watch.tic(module_ptr->name());
 
+  // 将规划数据设置到模块中
   module_ptr->setData(planner_data);
+  // 将上一个模块的输出设置到当前模块中
   module_ptr->setPreviousModuleOutput(previous_module_output);
 
+  // 锁定模块的实时控制（RTC）命令，确保线程安全
   module_ptr->lockRTCCommand();
+  // 运行模块并获取其输出结果
   const auto result = module_ptr->run();
+  // 解锁模块的实时控制命令
   module_ptr->unlockRTCCommand();
 
+  // 执行模块的后处理逻辑
   module_ptr->postProcess();
 
+  // 更新模块的当前状态
   module_ptr->updateCurrentState();
 
+  // 发布感兴趣对象的标记（Marker）
   module_ptr->publishObjectsOfInterestMarker();
 
+  // 记录模块的处理时间，并将结果累加到 processing_time_ 中
   processing_time_.at(module_ptr->name()) += stop_watch.toc(module_ptr->name(), true);
+
+  // 返回模块的输出结果
   return result;
 }
 
@@ -920,29 +956,42 @@ SlotOutput SubPlannerManager::runApprovedModules(
     approved_modules_output, is_candidate_plan_applied, is_this_failed, is_this_waiting_approval};
 }
 
+// SubPlannerManager 的 propagateFull 函数，用于在多个场景模块之间传播规划结果
 SlotOutput SubPlannerManager::propagateFull(
   const std::shared_ptr<PlannerData> & data, const SlotOutput & previous_slot_output)
 {
+  // 获取当前管理器中模块的数量
   const size_t module_size = manager_ptrs_.size();
+  // 计算最大迭代次数：module_size * (module_size + 1) / 2
   const size_t max_iteration_num = static_cast<int>(module_size * (module_size + 1) / 2);
 
+  // 初始化状态标志：是否等待上游模块批准
   bool is_waiting_approved_slot = previous_slot_output.is_upstream_waiting_approved;
+  // 初始化状态标志：是否因上游模块失败而无法继续
   bool is_failed_approved_slot = false;
+  // 初始化输出路径为上一个槽位的输出路径
   auto output_path = previous_slot_output.valid_output;
 
+  // 用于存储需要删除的模块
   std::vector<SceneModulePtr> deleted_modules;
+
+  // 进入迭代循环，最多执行 max_iteration_num 次
   for (size_t itr_num = 0; itr_num < max_iteration_num; ++itr_num) {
+
+    // 运行所有已批准的模块，获取它们的输出
     const auto approved_module_result = runApprovedModules(data, previous_slot_output.valid_output);
     const auto & approved_module_output = approved_module_result.valid_output;
 
-    // these status needs to be propagated to downstream slots
-    // if any of the slots returned following statuses, keep it
+    // 状态传播：如果任何模块返回“等待上游批准”或“上游失败”，则更新状态标志
     is_waiting_approved_slot =
       is_waiting_approved_slot || approved_module_result.is_upstream_waiting_approved;
     is_failed_approved_slot =
       is_failed_approved_slot || approved_module_result.is_upstream_failed_approved;
 
+    // 获取需要运行的请求模块
     const auto request_modules = getRequestModules(approved_module_output, deleted_modules);
+
+    // 如果没有需要运行的模块，直接返回当前的槽位输出
     if (request_modules.empty()) {
       // there is no module that needs to be launched
       return SlotOutput{
@@ -950,9 +999,11 @@ SlotOutput SubPlannerManager::propagateFull(
         is_waiting_approved_slot};
     }
 
+    // 运行请求模块中优先级最高的模块，获取其输出
     const auto [highest_priority_module, candidate_module_output] =
       runRequestModules(request_modules, data, approved_module_output);
 
+    // 如果没有需要运行的模块，直接返回当前的槽位输出
     if (!highest_priority_module) {
       // there is no need to launch new module
       return SlotOutput{
@@ -960,6 +1011,7 @@ SlotOutput SubPlannerManager::propagateFull(
         is_waiting_approved_slot};
     }
 
+    // 如果最高优先级模块正在等待批准，直接返回当前的槽位输出
     if (highest_priority_module->isWaitingApproval()) {
       // there is no need to launch new module
       return SlotOutput{
@@ -967,11 +1019,15 @@ SlotOutput SubPlannerManager::propagateFull(
         is_waiting_approved_slot};
     }
 
+    // 更新输出路径为候选模块的输出
     output_path = candidate_module_output;
+    // 将最高优先级模块添加到已批准模块列表
     addApprovedModule(highest_priority_module);
+    // 清理候选模块列表
     clearCandidateModules();
   }
 
+  // 在迭代完成后，返回最终的槽位输出
   return SlotOutput{
     output_path, isAnyCandidateExclusive(), is_failed_approved_slot, is_waiting_approved_slot};
 }

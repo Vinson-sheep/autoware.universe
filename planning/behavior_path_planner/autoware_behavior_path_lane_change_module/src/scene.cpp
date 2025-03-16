@@ -233,44 +233,66 @@ void NormalLaneChange::update_filtered_objects()
   filtered_objects_ = filter_objects();
 }
 
+// 在变道场景插件调用时，进行车道变更状态的信息更新。
 void NormalLaneChange::updateLaneChangeStatus()
 {
+  // 创建一个计时器对象，用于跟踪函数运行时间，并将时间记录器绑定到 time_keeper_ 对象
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
+
+  // 调用 getSafePath 函数，检查当前车道变更路径是否有效和安全
+  // found_valid_path 表示路径是否有效，found_safe_path 表示路径是否安全
   const auto [found_valid_path, found_safe_path] = getSafePath(status_.lane_change_path);
 
-  // Update status
+  // 更新状态信息：路径是否有效
   status_.is_valid_path = found_valid_path;
+
+  // 更新状态信息：路径是否安全
   status_.is_safe = found_safe_path;
+
+  // 更新状态信息：车道变更路径的头部信息，可能包含时间戳、帧ID等
   status_.lane_change_path.path.header = getRouteHeader();
 }
 
+// 根据当前车道和目标车道，生成并评估车道变更路径
 std::pair<bool, bool> NormalLaneChange::getSafePath(LaneChangePath & safe_path) const
 {
+  // 获取当前车辆所在的车道信息
   const auto & current_lanes = get_current_lanes();
+
+  // 获取目标车道信息
   const auto & target_lanes = get_target_lanes();
 
+  // 如果当前车道或目标车道为空，直接返回无效且不安全
   if (current_lanes.empty() || target_lanes.empty()) {
     return {false, false};
   }
 
+  // 定义一个容器，用于存储有效的车道变更路径
   LaneChangePaths valid_paths{};
-  bool found_safe_path = get_lane_change_paths(valid_paths);
-  // if no safe path is found and ego is stuck, try to find a path with a small margin
 
+  // 调用函数生成车道变更路径，并判断是否存在安全路径
+  // 参数包括当前车道、目标车道、车道变更方向、是否卡住，以及用于存储有效路径的容器
+  bool found_safe_path = get_lane_change_paths(valid_paths);
+
+  // ?
   if (valid_paths.empty() && terminal_lane_change_path_) {
     valid_paths.push_back(terminal_lane_change_path_.value());
   }
 
+  // 将有效路径存储到调试信息中，用于后续调试或日志记录
   lane_change_debug_.valid_paths = valid_paths;
 
+  // 如果没有找到任何有效路径，直接返回无效且不安全
   if (valid_paths.empty()) {
     return {false, false};
   }
 
+  // 如果找到了安全路径
   if (found_safe_path) {
+    // 选择最后一个有效路径作为安全路径（可能是最优路径）
     safe_path = valid_paths.back();
   } else {
-    // force candidate
+    // 如果没有找到安全路径，但有候选路径，则选择第一个候选路径
     safe_path = valid_paths.front();
   }
 
@@ -1112,14 +1134,16 @@ std::vector<LaneChangePhaseMetrics> NormalLaneChange::get_lane_changing_metrics(
 
 bool NormalLaneChange::get_lane_change_paths(LaneChangePaths & candidate_paths) const
 {
-  lane_change_debug_.collision_check_objects.clear();
+  lane_change_debug_.collision_check_objects.clear(); // 清空碰撞检查对象
   lane_change_debug_.lane_change_metrics.clear();
 
+  // 如果当前车道为空，返回错误
   if (!common_data_ptr_->is_lanes_available()) {
     RCLCPP_WARN(logger_, "lanes are not available. Not expected.");
     return false;
   }
 
+  // 如果目标车道为空，返回错误
   if (common_data_ptr_->lanes_polygon_ptr->target_neighbor.empty()) {
     RCLCPP_WARN(logger_, "target_lane_neighbors_polygon_2d is empty. Not expected.");
     return false;

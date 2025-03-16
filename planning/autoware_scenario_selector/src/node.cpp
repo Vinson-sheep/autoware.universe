@@ -142,6 +142,7 @@ autoware_planning_msgs::msg::Trajectory::ConstSharedPtr ScenarioSelectorNode::ge
   return lane_driving_trajectory_;
 }
 
+// 基于位置选择场景
 std::string ScenarioSelectorNode::selectScenarioByPosition()
 {
   const auto is_in_lane =
@@ -176,6 +177,7 @@ std::string ScenarioSelectorNode::selectScenarioByPosition()
   return current_scenario_;
 }
 
+// 更新场景
 void ScenarioSelectorNode::updateCurrentScenario()
 {
   const auto prev_scenario = current_scenario_;
@@ -210,6 +212,7 @@ void ScenarioSelectorNode::updateCurrentScenario()
   }
 }
 
+// 是否可以进入泊车模式
 bool ScenarioSelectorNode::isSwitchToParking(const bool is_stopped)
 {
   const auto is_in_parking_lot =
@@ -230,6 +233,7 @@ bool ScenarioSelectorNode::isSwitchToParking(const bool is_stopped)
   return (this->now() - lane_driving_stop_time_.get()).seconds() > lane_stopping_timeout_s;
 }
 
+// 是否可以进入道路驾驶模式
 bool ScenarioSelectorNode::isSwitchToLaneDriving()
 {
   const auto is_along_lane = isAlongLane(route_handler_, current_pose_->pose.pose);
@@ -249,6 +253,7 @@ bool ScenarioSelectorNode::isSwitchToLaneDriving()
   return duration > empty_parking_trajectory_timeout_s;
 }
 
+// 判断是否是自动驾驶模式
 bool ScenarioSelectorNode::isAutonomous() const
 {
   return operation_mode_state_->mode ==
@@ -256,6 +261,7 @@ bool ScenarioSelectorNode::isAutonomous() const
          operation_mode_state_->is_autoware_control_enabled;
 }
 
+// 判断泊车轨迹是否为空
 bool ScenarioSelectorNode::isEmptyParkingTrajectory() const
 {
   if (parking_trajectory_) {
@@ -264,11 +270,13 @@ bool ScenarioSelectorNode::isEmptyParkingTrajectory() const
   return false;
 }
 
+// 地图回调函数
 void ScenarioSelectorNode::onMap(const autoware_map_msgs::msg::LaneletMapBin::ConstSharedPtr msg)
 {
   route_handler_ = std::make_shared<autoware::route_handler::RouteHandler>(*msg);
 }
 
+// 路由回调函数
 void ScenarioSelectorNode::onRoute(
   const autoware_planning_msgs::msg::LaneletRoute::ConstSharedPtr msg)
 {
@@ -281,6 +289,7 @@ void ScenarioSelectorNode::onRoute(
   route_ = msg;
 }
 
+// 里程计回调函数
 void ScenarioSelectorNode::onOdom(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
 {
   current_pose_ = msg;
@@ -304,6 +313,7 @@ void ScenarioSelectorNode::onOdom(const nav_msgs::msg::Odometry::ConstSharedPtr 
   }
 }
 
+// 校验信息完整性
 bool ScenarioSelectorNode::isDataReady()
 {
   if (!current_pose_) {
@@ -346,21 +356,23 @@ bool ScenarioSelectorNode::isDataReady()
 
 void ScenarioSelectorNode::updateData()
 {
+  // 更新停止计时器
   {
     stop_watch.tic();
   }
+  // 获取泊车状态
   {
     auto msg = sub_parking_state_->take_data();
     is_parking_completed_ = msg ? msg->data : is_parking_completed_;
   }
-
+  // 获取里程计信息
   {
     auto msgs = sub_odom_->take_data();
     for (const auto & msg : msgs) {
       onOdom(msg);
     }
   }
-
+  // 获取操作模式
   {
     auto msg = sub_operation_mode_state_->take_data();
     if (msg) operation_mode_state_ = msg;
@@ -369,34 +381,38 @@ void ScenarioSelectorNode::updateData()
 
 void ScenarioSelectorNode::onTimer()
 {
+  // 更新数据
   updateData();
 
+  // 安全性校验
   if (!isDataReady()) {
     return;
   }
 
-  // Initialize Scenario
+  // 如果原场景为空，基于位置选择场景
   if (current_scenario_ == autoware_internal_planning_msgs::msg::Scenario::EMPTY) {
     current_scenario_ = selectScenarioByPosition();
   }
 
+  // 更新场景
   updateCurrentScenario();
+
+  // 发布场景
   autoware_internal_planning_msgs::msg::Scenario scenario;
   scenario.current_scenario = current_scenario_;
-
   if (current_scenario_ == autoware_internal_planning_msgs::msg::Scenario::PARKING) {
     scenario.activating_scenarios.push_back(current_scenario_);
   }
-
   pub_scenario_->publish(scenario);
 
-  // Publish ProcessingTime
+  // 发布处理时间
   autoware_internal_debug_msgs::msg::Float64Stamped processing_time_msg;
   processing_time_msg.stamp = get_clock()->now();
   processing_time_msg.data = stop_watch.toc();
   pub_processing_time_->publish(processing_time_msg);
 }
 
+// 转发驾驶轨迹
 void ScenarioSelectorNode::onLaneDrivingTrajectory(
   const autoware_planning_msgs::msg::Trajectory::ConstSharedPtr msg)
 {
@@ -409,6 +425,7 @@ void ScenarioSelectorNode::onLaneDrivingTrajectory(
   publishTrajectory(msg);
 }
 
+// 转发泊车轨迹
 void ScenarioSelectorNode::onParkingTrajectory(
   const autoware_planning_msgs::msg::Trajectory::ConstSharedPtr msg)
 {
@@ -421,6 +438,7 @@ void ScenarioSelectorNode::onParkingTrajectory(
   publishTrajectory(msg);
 }
 
+// 发布轨迹
 void ScenarioSelectorNode::publishTrajectory(
   const autoware_planning_msgs::msg::Trajectory::ConstSharedPtr msg)
 {

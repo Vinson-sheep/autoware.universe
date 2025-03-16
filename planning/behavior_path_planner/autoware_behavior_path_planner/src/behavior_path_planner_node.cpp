@@ -333,6 +333,7 @@ void BehaviorPathPlannerNode::run()
 {
   takeData(); // 获取数据
 
+  // 检查数据是否准备好
   if (!isDataReady()) {
     return;
   }
@@ -340,57 +341,46 @@ void BehaviorPathPlannerNode::run()
   RCLCPP_DEBUG(get_logger(), "----- BehaviorPathPlannerNode start -----");
 
   // 只有在 LANE DRIVING 场景下才执行路径规划
-  // behavior_path_planner runs only in LANE DRIVING scenario.
   if (current_scenario_->current_scenario != Scenario::LANEDRIVING) {
     return;
   }
 
   // 检查地图是否更新
-  // check for map update
   LaneletMapBin::ConstSharedPtr map_ptr{nullptr};
   {
-    if (has_received_map_) {
-      // Note: duplicating the shared_ptr prevents the data from being deleted by another thread!
-      map_ptr = map_ptr_;
+    if (has_received_map_) {  // 如果接收到新的地图数据
+      map_ptr = map_ptr_; // 复制 shared_ptr，防止数据被其他线程删除
       has_received_map_ = false;
     }
   }
 
   // 检查路由是否更新
-  // check for route update
   LaneletRoute::ConstSharedPtr route_ptr{nullptr};
   {
-    if (has_received_route_) {
-      // Note: duplicating the shared_ptr prevents the data from being deleted by another thread!
-      route_ptr = route_ptr_;
+    if (has_received_route_) {  // 如果接收到新的路径数据
+      route_ptr = route_ptr_; // 复制 shared_ptr，防止数据被其他线程删除
       has_received_route_ = false;
     }
   }
 
-  std::unique_lock<std::mutex> lk_pd(mutex_pd_);  // for planner_data_
+  std::unique_lock<std::mutex> lk_pd(mutex_pd_);  // 锁定 planner_data_
 
   // 更新地图
-  // update map
   if (map_ptr) {
     planner_data_->route_handler->setMap(*map_ptr);
   }
 
   // 加锁，保护 planner_manager_
-  std::unique_lock<std::mutex> lk_manager(mutex_manager_);  // for planner_manager_ 
+  std::unique_lock<std::mutex> lk_manager(mutex_manager_);  // 锁定 planner_manager_
 
   // 更新路由
-  // update route
-  const bool is_first_time = !(planner_data_->route_handler->isHandlerReady());
+  const bool is_first_time = !(planner_data_->route_handler->isHandlerReady()); // 是否是第一次运行
   if (route_ptr) {
     planner_data_->route_handler->setRoute(* );
-    // uuid is not changed when rerouting with modified goal,
-    // in this case do not need to reset modules.
-    // 如果路由 ID 没有变化，则不需要重置模块
+    // 如果 UUID 不变（目标点修改导致的重新规划），则不需要重置模块
     const bool has_same_route_id =
       planner_data_->prev_route_id && route_ptr->uuid == planner_data_->prev_route_id;
-    // 如果收到新的路由，则重置行为树
-    // Reset behavior tree when new route is received,
-    // so that the each modules do not have to care about the "route jump".
+    // 如果接收到新的路径 UUID，则重置行为树
     if (!is_first_time && !has_same_route_id) {
       RCLCPP_INFO(get_logger(), "New uuid route is received. Resetting modules.");
       planner_manager_->reset();
@@ -398,6 +388,7 @@ void BehaviorPathPlannerNode::run()
       planner_data_->prev_modified_goal.reset();
     }
   }
+  // 如果不在 Autoware 自主导航模式下且没有批准的重新规划模块，则重置当前路径车道
   const auto controlled_by_autoware_autonomously =
     planner_data_->operation_mode->mode == OperationModeState::AUTONOMOUS &&
     planner_data_->operation_mode->is_autoware_control_enabled;
@@ -407,32 +398,24 @@ void BehaviorPathPlannerNode::run()
     planner_manager_->resetCurrentRouteLanelet(planner_data_);
 
   // 运行行为规划器
-  // run behavior planner
   const auto output = planner_manager_->run(planner_data_);
 
   // 处理路径
-  // path handling
   const auto path = getPath(output, planner_data_, planner_manager_);
 
   // 更新规划数据
-  // update planner data
   planner_data_->prev_output_path = path;
 
   // 计算转向信号
-  // compute turn signal
   computeTurnSignal(planner_data_, *path, output);
 
   // 发布重新路由的可用性
-  // publish reroute availability
   publish_reroute_availability();
 
   // 发布可行驶边界
-  // publish drivable bounds
   publish_bounds(*path);
 
   // 裁剪路径，确保路径长度满足要求
-  // NOTE: In order to keep backward_path_length at least, resampling interval is added to the
-  // backward.
   const auto current_pose = planner_data_->self_odometry->pose.pose;
   if (!path->points.empty()) {
     const size_t current_seg_idx = planner_data_->findEgoSegmentIndex(path->points);
@@ -456,14 +439,15 @@ void BehaviorPathPlannerNode::run()
 
   // 发布场景模块的调试信息
   publishSceneModuleDebugMsg(planner_manager_->getDebugMsg());
+  // 发布路径候选
   publishPathCandidate(planner_manager_->getSceneModuleManagers(), planner_data_);
+  // 发布路径参考
   publishPathReference(planner_manager_->getSceneModuleManagers(), planner_data_);
 
   // 如果修改了目标点，则发布修改后的目标点
-  // publish modified goal only when it is updated
   if (
     output.modified_goal &&
-    /* has changed modified goal */ (
+    /* 修改后的目标点是否变化 */ (
       !planner_data_->prev_modified_goal || autoware_utils::calc_distance2d(
                                               planner_data_->prev_modified_goal->pose.position,
                                               output.modified_goal->pose.position) > 0.01)) {
@@ -473,6 +457,7 @@ void BehaviorPathPlannerNode::run()
     modified_goal_publisher_->publish(modified_goal);
   }
 
+  // 更新上一次路径的 UUID
   planner_data_->prev_route_id = planner_data_->route_handler->getRouteUuid();
 
   // 解锁 planner_data_

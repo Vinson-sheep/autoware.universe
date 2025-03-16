@@ -365,29 +365,42 @@ bool DynamicObstacleAvoidanceModule::isExecutionReady() const
   return true;
 }
 
+// 更新模块所需的数据
 void DynamicObstacleAvoidanceModule::updateData()
 {
+  // 使用时间跟踪工具记录函数的执行时间
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
 
+  // 清空信息标记和调试标记
   info_marker_.markers.clear();
   debug_marker_.markers.clear();
 
+  // 获取上一次的目标对象
   const auto prev_objects = target_objects_manager_.getValidObjects();
   target_objects_manager_.initialize();
 
-  // 1. Rough filtering of target objects with small computing cost
+  // 1. 初步筛选目标对象（计算成本较低）
+  // 注册受管制对象（例如有明确交通规则的对象）
   registerRegulatedObjects(prev_objects);
+  // 注册非受管制对象（例如无明确交通规则的对象）
   registerUnregulatedObjects(prev_objects);
 
+  // 生成自车的横向可行路径
   const auto & ego_lat_feasible_paths = generateLateralFeasiblePaths(getEgoPose(), getEgoSpeed());
+  // 使用横向可行路径完成目标对象管理器的初始化
   target_objects_manager_.finalize(ego_lat_feasible_paths);
 
-  // 2. Precise filtering of target objects and check if they should be avoided
+  // 2. 精确筛选目标对象并判断是否需要避障
+  // 判断受管制对象是否需要避障
   determineWhetherToAvoidAgainstRegulatedObjects(prev_objects);
+  // 判断非受管制对象是否需要避障
   determineWhetherToAvoidAgainstUnregulatedObjects(prev_objects);
 
+  // 获取候选目标对象
   const auto target_objects_candidate = target_objects_manager_.getValidObjects();
+  // 清空当前目标对象列表
   target_objects_.clear();
+  // 遍历候选目标对象，筛选出需要避障的对象
   for (const auto & target_object_candidate : target_objects_candidate) {
     if (target_object_candidate.should_be_avoided) {
       target_objects_.push_back(target_object_candidate);
@@ -400,42 +413,55 @@ bool DynamicObstacleAvoidanceModule::canTransitSuccessState()
   return planner_data_->dynamic_object->objects.empty();
 }
 
+// 生成规划输出
 BehaviorModuleOutput DynamicObstacleAvoidanceModule::plan()
 {
+  // 获取上一个模块的输入路径
   const auto & input_path = getPreviousModuleOutput().path;
   if (input_path.points.empty()) {
-    throw std::runtime_error("input path is empty");
+    throw std::runtime_error("input path is empty");  // 如果输入路径为空，抛出异常
   }
 
+  // 计算自车路径的预留多边形
   const auto ego_path_reserve_poly = calcEgoPathReservePoly(input_path);
 
-  // create obstacles to avoid (= extract from the drivable area)
+  // 创建需要避障的障碍物（从可行驶区域中提取）
   std::vector<DrivableAreaInfo::Obstacle> obstacles_for_drivable_area;
   for (const auto & object : target_objects_) {
+    // 根据目标对象的类型和参数，生成障碍物多边形
     const auto obstacle_poly = [&]() {
       if (getObjectType(object.label) == ObjectType::UNREGULATED) {
+        // 如果是未受管制对象，使用基于预测路径的方法生成障碍物多边形
         return calcPredictedPathBasedDynamicObstaclePolygon(object, ego_path_reserve_poly);
       }
 
       if (parameters_->polygon_generation_method == PolygonGenerationMethod::EGO_PATH_BASE) {
+        // 如果参数指定为基于自车路径的方法，生成障碍物多边形
         return calcEgoPathBasedDynamicObstaclePolygon(object);
       }
       if (parameters_->polygon_generation_method == PolygonGenerationMethod::OBJECT_PATH_BASE) {
+        // 如果参数指定为基于目标对象路径的方法，生成障碍物多边形
         return calcObjectPathBasedDynamicObstaclePolygon(object);
       }
-      throw std::logic_error("The polygon_generation_method's string is invalid.");
+      throw std::logic_error("The polygon_generation_method's string is invalid."); // 如果方法无效，抛出异常
     }();
+
+    // 如果生成了有效的障碍物多边形，则将其添加到障碍物列表中
     if (obstacle_poly) {
       obstacles_for_drivable_area.push_back(
         {object.pose, obstacle_poly.value(), object.is_collision_left});
 
+      // 添加障碍物标记到信息标记中
       appendObjectMarker(info_marker_, object.pose);
+      // 添加提取的多边形标记到调试标记中
       appendExtractedPolygonMarker(debug_marker_, obstacle_poly.value(), object.pose.position.z);
     }
   }
-  // generate drivable lanes
+
+  // 生成可行驶车道信息
   DrivableAreaInfo current_drivable_area_info;
   if (parameters_->expand_drivable_area) {
+    // 如果参数指定扩展可行驶区域，则生成扩展的可行驶车道
     auto current_lanelets =
       getCurrentLanesFromPath(getPreviousModuleOutput().reference_path, planner_data_);
     std::for_each(current_lanelets.begin(), current_lanelets.end(), [&](const auto & lanelet) {
@@ -443,22 +469,26 @@ BehaviorModuleOutput DynamicObstacleAvoidanceModule::plan()
         generateExpandedDrivableLanes(lanelet, planner_data_, parameters_));
     });
   } else {
+    // 如果不扩展可行驶区域，则直接使用上一个模块的可行驶车道
     current_drivable_area_info.drivable_lanes =
       getPreviousModuleOutput().drivable_area_info.drivable_lanes;
   }
+
+  // 设置当前可行驶区域的障碍物和参数
   current_drivable_area_info.obstacles = obstacles_for_drivable_area;
   current_drivable_area_info.enable_expanding_hatched_road_markings =
     parameters_->use_hatched_road_markings;
 
+  // 创建行为模块输出
   BehaviorModuleOutput output;
-  output.path = input_path;
+  output.path = input_path; // 输出路径为输入路径
   output.drivable_area_info = utils::combineDrivableAreaInfo(
-    current_drivable_area_info, getPreviousModuleOutput().drivable_area_info);
-  output.reference_path = getPreviousModuleOutput().reference_path;
-  output.turn_signal_info = getPreviousModuleOutput().turn_signal_info;
-  output.modified_goal = getPreviousModuleOutput().modified_goal;
+    current_drivable_area_info, getPreviousModuleOutput().drivable_area_info);  // 合并可行驶区域信息
+  output.reference_path = getPreviousModuleOutput().reference_path; // 设置参考路径
+  output.turn_signal_info = getPreviousModuleOutput().turn_signal_info; // 设置转向信号信息
+  output.modified_goal = getPreviousModuleOutput().modified_goal; // 设置修改后的目标点
 
-  return output;
+  return output;  // 返回行为模块输出
 }
 
 CandidateOutput DynamicObstacleAvoidanceModule::planCandidate() const

@@ -197,18 +197,22 @@ bool StaticObstacleAvoidanceModule::canTransitSuccessState()
   return data.state == AvoidanceState::CANCEL || data.state == AvoidanceState::SUCCEEDED;
 }
 
+// 填充基础数据
 void StaticObstacleAvoidanceModule::fillFundamentalData(
   AvoidancePlanningData & data, DebugData & debug)
 {
+  // 使用时间跟踪工具记录函数的执行时间
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
-  // reference pose
+
+  // 获取参考姿态：基于自车姿态和上一次的样条偏移路径计算未偏移的自车姿态
   data.reference_pose =
     utils::getUnshiftedEgoPose(getEgoPose(), helper_->getPreviousSplineShiftPath());
 
-  // lanelet info
+  // 获取当前车道信息：从上一个模块的参考路径中提取当前车道
   data.current_lanelets = utils::static_obstacle_avoidance::getCurrentLanesFromPath(
     getPreviousModuleOutput().reference_path, planner_data_);
 
+  // 获取扩展车道：基于当前车道和自车姿态，获取扩展车道信息
   data.extend_lanelets = utils::static_obstacle_avoidance::getExtendLanes(
     data.current_lanelets, getEgoPose(), planner_data_);
 
@@ -217,9 +221,11 @@ void StaticObstacleAvoidanceModule::fillFundamentalData(
         data.current_lanelets, getEgoPose(), &closest_lanelet))
     data.closest_lanelet = closest_lanelet;
 
-  // expand drivable lanes
+  // 检查自车是否在当前车道内
   const auto is_within_current_lane =
     utils::static_obstacle_avoidance::isWithinLanes(data.closest_lanelet, planner_data_);
+
+  // 查找是否存在红灯信号的车道
   const auto red_signal_lane_itr = std::find_if(
     data.current_lanelets.begin(), data.current_lanelets.end(), [&](const auto & lanelet) {
       if (utils::traffic_light::isTrafficSignalStop({lanelet}, planner_data_)) {
@@ -228,25 +234,31 @@ void StaticObstacleAvoidanceModule::fillFundamentalData(
       const auto next_lanes = planner_data_->route_handler->getNextLanelets(lanelet);
       return utils::traffic_light::isTrafficSignalStop(next_lanes, planner_data_);
     });
+  
+  // 判断是否不使用相邻车道
   const auto not_use_adjacent_lane =
     is_within_current_lane && red_signal_lane_itr != data.current_lanelets.end();
 
+  // 生成可行驶车道
   std::for_each(
     data.current_lanelets.begin(), data.current_lanelets.end(), [&](const auto & lanelet) {
       if (!not_use_adjacent_lane || red_signal_lane_itr->id() != lanelet.id()) {
+        // 如果不使用相邻车道，则生成扩展的可行驶车道
+        // 如果当前车道不是红灯信号车道，则生成扩展的可行驶车道
         data.drivable_lanes.push_back(
           utils::static_obstacle_avoidance::generateExpandedDrivableLanes(
             lanelet, planner_data_, parameters_));
       } else {
+        // 如果是红灯信号车道，则生成未扩展的可行驶车道
         data.drivable_lanes.push_back(
           utils::static_obstacle_avoidance::generateNotExpandedDrivableLanes(lanelet));
         data.red_signal_lane = lanelet;
       }
     });
 
-  // calc drivable bound
-  auto tmp_path = getPreviousModuleOutput().path;
-  const auto shorten_lanes = utils::cutOverlappedLanes(tmp_path, data.drivable_lanes);
+  // 计算可行驶边界
+  auto tmp_path = getPreviousModuleOutput().path; // 获取上一个模块的路径
+  const auto shorten_lanes = utils::cutOverlappedLanes(tmp_path, data.drivable_lanes);  // 去除重叠车道
   const auto use_left_side_hatched_road_marking_area = [&]() {
     if (!not_use_adjacent_lane) {
       return true;
@@ -268,63 +280,66 @@ void StaticObstacleAvoidanceModule::fillFundamentalData(
     use_right_side_hatched_road_marking_area, parameters_->use_intersection_areas,
     parameters_->use_freespace_areas, false);
 
-  // reference path
+  // 获取参考路径
   if (isDrivingSameLane(helper_->getPreviousDrivingLanes(), data.current_lanelets)) {
+    // 如果当前车道与上一次相同，则扩展参考路径
     data.reference_path_rough = extendBackwardLength(getPreviousModuleOutput().path);
   } else {
+    // 如果车道发生变化，则直接使用上一个模块的路径
     data.reference_path_rough = getPreviousModuleOutput().path;
     RCLCPP_WARN(getLogger(), "Previous module lane is updated. Don't use latest reference path.");
   }
 
-  // resampled reference path
+  // 对参考路径进行重采样
   data.reference_path = utils::resamplePathWithSpline(
     data.reference_path_rough, parameters_->resample_interval_for_planning);
 
-  // closest index
+  // 获取自车在参考路径上的最近点索引
   data.ego_closest_path_index = planner_data_->findEgoIndex(data.reference_path.points);
 
-  // arclength from ego pose (used in many functions)
+  // 计算自车姿态到路径各点的弧长
   data.arclength_from_ego = utils::calcPathArcLengthArray(
     data.reference_path, 0, data.reference_path.points.size(),
     autoware::motion_utils::calcSignedArcLength(data.reference_path.points, getEgoPosition(), 0));
 
+  // ??
   data.is_allowed_goal_modification =
     utils::isAllowedGoalModification(planner_data_->route_handler);
   data.distance_to_red_traffic_light = utils::traffic_light::calcDistanceToRedTrafficLight(
     data.current_lanelets, data.reference_path_rough, planner_data_);
 
+  // 计算返回死点的距离
   data.to_return_point = utils::static_obstacle_avoidance::calcDistanceToReturnDeadLine(
     data.current_lanelets, data.reference_path_rough, planner_data_, parameters_,
     data.distance_to_red_traffic_light, data.is_allowed_goal_modification);
 
+  // 计算避障起始点的距离
   data.to_start_point = utils::static_obstacle_avoidance::calcDistanceToAvoidStartLine(
     data.current_lanelets, parameters_, data.distance_to_red_traffic_light);
 
-  // filter only for the latest detected objects.
+  // 筛选最新的检测目标对象
   fillAvoidanceTargetObjects(data, debug);
 
-  // compensate lost object which was avoidance target. if the time hasn't passed more than
-  // threshold since perception module lost the target yet, this module keeps it as avoidance
-  // target.
+  // 补偿丢失的目标对象：如果感知模块丢失目标的时间未超过阈值，则保留该目标作为避障对象
   utils::static_obstacle_avoidance::compensateLostTargetObjects(
     registered_objects_, data, clock_->now(), planner_data_, parameters_);
 
-  // once an object filtered for boundary clipping, this module keeps the information until the end
-  // of execution.
+  // 更新裁剪目标对象信息：一旦目标对象被裁剪，保留该信息直到执行结束
   utils::static_obstacle_avoidance::updateClipObject(clip_objects_, data);
 
-  // calculate various data for each target objects.
+  // 计算每个目标对象的各种数据
   fillAvoidanceTargetData(data.target_objects);
 
-  // sort object order by longitudinal distance
+  // 按纵向距离对目标对象排序
   std::sort(data.target_objects.begin(), data.target_objects.end(), [](auto a, auto b) {
     return a.longitudinal < b.longitudinal;
   });
 
-  // set base path
+  // 设置参考路径到路径偏移器
   path_shifter_.setPath(data.reference_path);
 }
 
+// 筛选和处理目标对象
 void StaticObstacleAvoidanceModule::fillAvoidanceTargetObjects(
   AvoidancePlanningData & data, DebugData & debug) const
 {
@@ -333,8 +348,9 @@ void StaticObstacleAvoidanceModule::fillAvoidanceTargetObjects(
   using utils::static_obstacle_avoidance::separateObjectsByPath;
   using utils::static_obstacle_avoidance::updateRoadShoulderDistance;
 
-  // Separate dynamic objects based on whether they are inside or outside of the expanded lanelets.
-  constexpr double MARGIN = 10.0;
+  // 根据目标车道内外分离对象
+  constexpr double MARGIN = 10.0; // 安全边界距离
+  // 计算前方检测范围（考虑红绿灯距离）
   const auto forward_detection_range = [&]() {
     if (!data.distance_to_red_traffic_light.has_value()) {
       return helper_->getForwardDetectionRange(data.closest_lanelet);
@@ -344,38 +360,44 @@ void StaticObstacleAvoidanceModule::fillAvoidanceTargetObjects(
       data.distance_to_red_traffic_light.value());
   }();
 
+  // 根据路径分离对象：分为目标车道内的对象和目标车道外的对象
   const auto [object_within_target_lane, object_outside_target_lane] = separateObjectsByPath(
     helper_->getPreviousReferencePath(), helper_->getPreviousSplineShiftPath().path, planner_data_,
     data, parameters_, forward_detection_range + MARGIN, debug);
 
+  // 处理目标车道外的对象
   for (const auto & object : object_outside_target_lane.objects) {
-    ObjectData other_object = createObjectData(data, object);
-    other_object.info = ObjectInfo::OUT_OF_TARGET_AREA;
-    data.other_objects.push_back(other_object);
+    ObjectData other_object = createObjectData(data, object); // 创建对象数据
+    other_object.info = ObjectInfo::OUT_OF_TARGET_AREA; // 标记为非目标区域对象
+    data.other_objects.push_back(other_object); // 添加到非目标区域对象列表
   }
 
+  // 处理目标车道内的对象
   ObjectDataArray objects;
   for (const auto & object : object_within_target_lane.objects) {
-    objects.push_back(createObjectData(data, object));
+    objects.push_back(createObjectData(data, object));  // 创建对象数据并添加到列表
   }
 
-  // Filter out the objects to determine the ones to be avoided.
+  // 筛选需要避障的对象
   filterTargetObjects(objects, data, forward_detection_range, planner_data_, parameters_);
+  // 更新道路边缘距离
   updateRoadShoulderDistance(data, planner_data_, parameters_);
 
-  // debug
+  // 调试信息
   {
     std::vector<AvoidanceDebugMsg> debug_info_array;
     const auto append = [&](const auto & o) {
       AvoidanceDebugMsg debug_info;
-      debug_info.object_id = to_hex_string(o.object.object_id);
-      debug_info.longitudinal_distance = o.longitudinal;
-      debug_info.lateral_distance_from_centerline = o.to_centerline;
+      debug_info.object_id = to_hex_string(o.object.object_id); // 对象ID
+      debug_info.longitudinal_distance = o.longitudinal;  // 纵向距离
+      debug_info.lateral_distance_from_centerline = o.to_centerline;  // 横向距离
       debug_info_array.push_back(debug_info);
     };
 
+    // 遍历对象列表，填充调试信息
     std::for_each(objects.begin(), objects.end(), [&](const auto & o) { append(o); });
 
+    // 更新调试数据
     updateAvoidanceDebugData(debug_info_array);
   }
 }
@@ -1062,119 +1084,154 @@ auto StaticObstacleAvoidanceModule::getTurnSignal(
     planner_data_->parameters.ego_nearest_yaw_threshold);
 }
 
+// 静态避障模块的规划函数，返回一个行为模块输出
 BehaviorModuleOutput StaticObstacleAvoidanceModule::plan()
 {
+  // 使用时间跟踪工具记录函数的执行时间
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
+  // 获取避障数据
   const auto & data = avoid_data_;
 
+  // 重置路径候选
   resetPathCandidate();
+  // 重置路径参考
   resetPathReference();
 
+  // 更新路径偏移器的偏移线
   updatePathShifter(data.safe_shift_line);
 
+  // 如果避障状态为成功
   if (data.state == AvoidanceState::SUCCEEDED) {
+    // 注销成功状态下的偏移线
     removeRegisteredShiftLines(State::SUCCEEDED);
+    // 返回上一个模块的输出
     return getPreviousModuleOutput();
   }
 
+  // 如果避障状态为取消
   if (data.state == AvoidanceState::CANCEL) {
+    // 注销失败状态下的偏移线
     removeRegisteredShiftLines(State::FAILED);
+    // 返回上一个模块的输出
     return getPreviousModuleOutput();
   }
 
+  // 如果需要让行
   if (data.yield_required) {
+    // 注销失败状态下的偏移线
     removeRegisteredShiftLines(State::FAILED);
   }
 
-  // generate path with shift points that have been inserted.
+  // 生成带有插入偏移点的路径
   ShiftedPath linear_shift_path =
-    utils::static_obstacle_avoidance::toShiftedPath(data.reference_path);
+    utils::static_obstacle_avoidance::toShiftedPath(data.reference_path); // 线性偏移路径
   ShiftedPath spline_shift_path =
-    utils::static_obstacle_avoidance::toShiftedPath(data.reference_path);
+    utils::static_obstacle_avoidance::toShiftedPath(data.reference_path); // 样条偏移路径
+  // 生成样条偏移路径
   const auto success_spline_path_generation =
     path_shifter_.generate(&spline_shift_path, true, SHIFT_TYPE::SPLINE);
+  // 生成线性偏移路径
   const auto success_linear_path_generation =
     path_shifter_.generate(&linear_shift_path, true, SHIFT_TYPE::LINEAR);
 
-  // set previous data
+  // 设置上一次的数据
   if (success_spline_path_generation && success_linear_path_generation) {
+    // 如果路径生成成功，更新上一次的线性偏移路径、样条偏移路径和参考路径
     helper_->setPreviousLinearShiftPath(linear_shift_path);
     helper_->setPreviousSplineShiftPath(spline_shift_path);
     helper_->setPreviousReferencePath(path_shifter_.getReferencePath());
   } else {
+    // 如果路径生成失败，使用上一次的样条偏移路径
     spline_shift_path = helper_->getPreviousSplineShiftPath();
   }
 
+  // 创建行为模块输出
   BehaviorModuleOutput output;
 
-  // turn signal
+  // 转向信号
   {
+    // 根据偏移路径生成转向信号信息
     output.turn_signal_info = getTurnSignal(spline_shift_path, linear_shift_path);
   }
 
-  // sparse resampling for computational cost
+  // 稀疏重采样以降低计算成本
   {
+    // 使用样条曲线对路径进行重采样
     spline_shift_path.path = utils::resamplePathWithSpline(
       spline_shift_path.path, parameters_->resample_interval_for_output);
   }
 
-  // update output data
+  // 更新输出数据
   {
+    // 更新自车行为信息
     updateEgoBehavior(data, spline_shift_path);
+    // 更新信息标记
     updateInfoMarker(avoid_data_);
+    // 更新调试标记
     updateDebugMarker(output, avoid_data_, path_shifter_, debug_data_);
   }
 
+  // 如果当前行驶车道与上一次相同
   if (isDrivingSameLane(helper_->getPreviousDrivingLanes(), data.current_lanelets)) {
+    // 使用样条偏移路径作为输出路径
     output.path = spline_shift_path.path;
   } else {
+    // 否则使用上一个模块的路径，并输出警告信息
     output.path = getPreviousModuleOutput().path;
     RCLCPP_WARN(getLogger(), "Previous module lane is updated. Do nothing.");
   }
 
+  // 设置参考路径
   output.reference_path = getPreviousModuleOutput().reference_path;
   path_reference_ = std::make_shared<PathWithLaneId>(getPreviousModuleOutput().reference_path);
 
+  // 获取自车在路径中的索引
   const size_t ego_idx = planner_data_->findEgoIndex(output.path.points);
+  // 根据自车索引裁剪路径长度
   utils::clipPathLength(
     output.path, ego_idx, planner_data_->parameters.forward_path_length,
     planner_data_->parameters.backward_path_length);
 
-  // Drivable area generation.
+  // 可行驶区域生成
   {
+    // 创建当前可行驶区域信息
     DrivableAreaInfo current_drivable_area_info;
-    // generate drivable lanes
+    // 生成可行驶车道
     std::for_each(
       data.current_lanelets.begin(), data.current_lanelets.end(), [&](const auto & lanelet) {
         current_drivable_area_info.drivable_lanes.push_back(
           utils::static_obstacle_avoidance::generateExpandedDrivableLanes(
             lanelet, planner_data_, parameters_));
       });
-    // expand hatched road markings
+    // 是否扩展网格化道路标记
     current_drivable_area_info.enable_expanding_hatched_road_markings =
       parameters_->use_hatched_road_markings;
-    // expand intersection areas
+    // 是否扩展交叉区域
     current_drivable_area_info.enable_expanding_intersection_areas =
       parameters_->use_intersection_areas;
-    // expand freespace areas
+    // 是否扩展自由空间区域
     current_drivable_area_info.enable_expanding_freespace_areas = parameters_->use_freespace_areas;
-    // generate obstacle polygons
+    // 生成障碍物多边形
     current_drivable_area_info.obstacles.clear();
 
     if (
       parameters_->path_generation_method == "optimization_base" ||
       parameters_->path_generation_method == "both") {
+      // 如果路径生成方法为基于优化或两者结合，则生成障碍物多边形
       current_drivable_area_info.obstacles =
         utils::static_obstacle_avoidance::generateObstaclePolygonsForDrivableArea(
           clip_objects_, parameters_, planner_data_->parameters.vehicle_width / 2.0);
     }
 
+    // 合并当前和上一次的可行驶区域信息
     output.drivable_area_info = utils::combineDrivableAreaInfo(
       current_drivable_area_info, getPreviousModuleOutput().drivable_area_info);
 
+    // 设置可行驶车道
     setDrivableLanes(output.drivable_area_info.drivable_lanes);
   }
 
+  // 返回行为模块输出
   return output;
 }
 
@@ -1422,64 +1479,80 @@ bool StaticObstacleAvoidanceModule::isValidShiftLine(
   return true;  // valid shift line.
 }
 
+// 静态避障模块的 updateData 函数：更新模块所需的数据
 void StaticObstacleAvoidanceModule::updateData()
 {
+  // 使用时间跟踪工具记录函数的执行时间
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
+  // 使用命名空间别名简化代码
   using utils::static_obstacle_avoidance::toShiftedPath;
 
+  // 将规划数据传递给辅助工具
   helper_->setData(planner_data_);
 
+  // 如果辅助工具尚未初始化，则进行初始化
   if (!helper_->isInitialized()) {
+    // 设置上一次的样条偏移路径
     helper_->setPreviousSplineShiftPath(toShiftedPath(getPreviousModuleOutput().path));
+    // 设置上一次的线性偏移路径
     helper_->setPreviousLinearShiftPath(toShiftedPath(getPreviousModuleOutput().path));
+    // 设置上一次的参考路径
     helper_->setPreviousReferencePath(getPreviousModuleOutput().path);
+    // 设置上一次的行驶车道
     helper_->setPreviousDrivingLanes(utils::static_obstacle_avoidance::getCurrentLanesFromPath(
       getPreviousModuleOutput().reference_path, planner_data_));
   }
 
+  // 初始化调试数据和避障数据
   debug_data_ = DebugData();
   avoid_data_ = AvoidancePlanningData();
 
-  // update base path and target objects.
+  // 更新基础数据（参考路径和目标对象）
   fillFundamentalData(avoid_data_, debug_data_);
 
-  // an empty path will kill further processing
+  // 如果参考路径为空，则终止后续处理
   if (avoid_data_.reference_path.points.empty()) {
     return;
   }
 
-  // update shift line generator.
+  // 更新偏移线生成器的数据
   generator_.setData(planner_data_);
   generator_.setPathShifter(path_shifter_);
   generator_.setHelper(helper_);
+  // 更新偏移线生成器
   generator_.update(avoid_data_, debug_data_);
 
-  // update shift line and check path safety.
+  // 更新偏移线并检查路径安全性
   fillShiftLine(avoid_data_, debug_data_);
 
-  // update ego behavior.
+  // 更新自车状态
   fillEgoStatus(avoid_data_, debug_data_);
 
-  // update debug data.
+  // 更新调试数据
   fillDebugData(avoid_data_, debug_data_);
 
-  // update rtc status.
+  // 更新实时控制（RTC）状态
   updateRTCData();
 
-  // update interest objects data
+  // 更新感兴趣对象的数据
   for (const auto & [uuid, data] : debug_data_.collision_check) {
+    // 根据对象是否安全，设置颜色（绿色表示安全，红色表示危险）
     const auto color = data.is_safe ? ColorName::GREEN : ColorName::RED;
+    // 设置感兴趣对象的数据
     setObjectsOfInterestData(data.current_obj_pose, data.obj_shape, color);
   }
 
+  // 更新安全标志
   safe_ = avoid_data_.safe;
 
+  // 如果模块未强制禁用，则更新强制禁用状态
   if (!force_deactivated_) {
     last_deactivation_triggered_time_ = clock_->now();
     force_deactivated_ = avoid_data_.force_deactivated;
     return;
   }
 
+  // 如果模块已强制禁用，检查是否已达到强制禁用的持续时间
   if (
     (clock_->now() - last_deactivation_triggered_time_).seconds() >
     parameters_->force_deactivate_duration_time) {
