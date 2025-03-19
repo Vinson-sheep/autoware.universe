@@ -25,6 +25,8 @@
 
 namespace autoware::behavior_path_planner
 {
+
+// 使用命名空间中的工具函数
 using autoware::motion_utils::calcSignedArcLength;
 using autoware::motion_utils::findNearestIndex;
 using autoware::motion_utils::findNearestSegmentIndex;
@@ -37,6 +39,7 @@ using geometry_msgs::msg::Point;
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
 
+// 采样规划器模块的构造函数
 SamplingPlannerModule::SamplingPlannerModule(
   const std::string & name, rclcpp::Node & node,
   const std::shared_ptr<SamplingPlannerParameters> & parameters,
@@ -47,10 +50,11 @@ SamplingPlannerModule::SamplingPlannerModule(
 : SceneModuleInterface{name, node, rtc_interface_ptr_map, objects_of_interest_marker_interface_ptr_map, planning_factor_interface},  // NOLINT
   vehicle_info_{autoware::vehicle_info_utils::VehicleInfoUtils(node).getVehicleInfo()}
 {
+  // 初始化内部参数
   internal_params_ = std::make_shared<SamplingPlannerInternalParameters>();
   updateModuleParams(parameters);
 
-  // check if the path is empty
+  // 添加硬约束：路径不能为空
   hard_constraints_.emplace_back(
     [](
       autoware::sampler_common::Path & path,
@@ -59,6 +63,7 @@ SamplingPlannerModule::SamplingPlannerModule(
       return !path.points.empty() && !path.poses.empty();
     });
 
+  // 添加硬约束：路径必须在可行驶区域内且无碰撞
   hard_constraints_.emplace_back(
     [](
       autoware::sampler_common::Path & path,
@@ -80,6 +85,7 @@ SamplingPlannerModule::SamplingPlannerModule(
       return path.constraint_results.collision_free && path.constraint_results.inside_drivable_area;
     });
 
+  // 添加硬约束：路径的曲率必须在允许范围内
   hard_constraints_.emplace_back(
     [](
       autoware::sampler_common::Path & path,
@@ -97,28 +103,10 @@ SamplingPlannerModule::SamplingPlannerModule(
       return curvatures_satisfied;
     });
 
-  // TODO(Daniel): Maybe add a soft cost for average distance to centerline?
-  // TODO(Daniel): Think of methods to prevent chattering
-  // TODO(Daniel): Add penalty for not ending up on the same line as ref path?
-  // TODO(Daniel): Length increasing curvature cost, increase curvature cost the longer the path is
-  // TODO(Daniel): in frenet path to path with laneID transform assign the laneid to the points from
-  // end to start -> that will prevent cases were some points on the output dont have a laneID
-  // TODO(Daniel): Set a goal that depends on the reference path and NOT the actual goal set by the
-  // user.
-  //  Yaw difference soft constraint cost -> Considering implementation
-  // soft_constraints_.emplace_back(
-  //   [&](
-  //     autoware::sampler_common::Path & path, [[maybe_unused]] const
-  //     autoware::sampler_common::Constraints & constraints,
-  //     [[maybe_unused]] const SoftConstraintsInputs & input_data) -> double {
-  //     if (path.points.empty()) return 0.0;
-  //     const auto & goal_pose_yaw =
-  //     autoware_utils::getRPY(input_data.goal_pose.orientation).z; const auto &
-  //     last_point_yaw = path.yaws.back(); const double angle_difference = std::abs(last_point_yaw
-  //     - goal_pose_yaw); return angle_difference / (3.141519 / 4.0);
-  //   });
+  // TODO(Daniel): 可能需要添加一些软约束或优化目标
+  // 例如：路径与中心线的平均距离、防止路径抖动的机制等
 
-  //  Remaining path length
+  // 添加软约束：路径剩余长度
   soft_constraints_.emplace_back(
     [&](
       autoware::sampler_common::Path & path,
@@ -152,7 +140,7 @@ SamplingPlannerModule::SamplingPlannerModule(
       return max_target_length / remaining_path_length;
     });
 
-  // Distance to centerline
+  // 添加软约束：路径与中心线的横向距离
   soft_constraints_.emplace_back(
     [&](
       [[maybe_unused]] autoware::sampler_common::Path & path,
@@ -169,7 +157,7 @@ SamplingPlannerModule::SamplingPlannerModule(
       return lateral_distance_to_center_lane / max_target_lateral_positions;
     });
 
-  // // Curvature cost
+  // 添加软约束：路径曲率成本
   soft_constraints_.emplace_back(
     [](
       autoware::sampler_common::Path & path,
@@ -184,11 +172,14 @@ SamplingPlannerModule::SamplingPlannerModule(
     });
 }
 
+// 检查是否需要执行规划
 bool SamplingPlannerModule::isExecutionRequested() const
 {
+  // 提取车辆当前位姿
   const auto ego_pose = planner_data_->self_odometry->pose.pose;
   lanelet::ConstLanelet current_lane;
 
+  // 获取最近的Lane
   if (!planner_data_->route_handler->getClosestLaneletWithinRoute(ego_pose, &current_lane)) {
     RCLCPP_ERROR(
       rclcpp::get_logger("behavior_path_planner").get_child("utils"),
@@ -196,38 +187,49 @@ bool SamplingPlannerModule::isExecutionRequested() const
     return false;
   }
 
+  // 如果之前没有输出，直接返回
   if (getPreviousModuleOutput().reference_path.points.empty()) {
     return false;
   }
 
+  // 判断之前的输出是否是前向路径
   if (!autoware::motion_utils::isDrivingForward(getPreviousModuleOutput().reference_path.points)) {
     RCLCPP_WARN(getLogger(), "Backward path is NOT supported. Just converting path to trajectory");
     return false;
   }
 
+  // 判断参考路径是否安全
   return !isReferencePathSafe();
 }
 
+// 检查参考路径是否安全
 bool SamplingPlannerModule::isReferencePathSafe() const
 {
   // TODO(Daniel): Don't use reference path, use a straight path forward.
   std::vector<DrivableLanes> drivable_lanes{};
+
+  // 提取参考路径
   const auto & prev_module_reference_path =
     std::make_shared<PathWithLaneId>(getPreviousModuleOutput().reference_path);
 
+  // 提取参数和自车位姿
   const auto & p = planner_data_->parameters;
   const auto ego_pose = planner_data_->self_odometry->pose.pose;
   lanelet::ConstLanelet current_lane;
 
+  // 提取最近的lane
   if (!planner_data_->route_handler->getClosestLaneletWithinRoute(ego_pose, &current_lane)) {
     RCLCPP_ERROR(
       rclcpp::get_logger("behavior_path_planner").get_child("utils"),
       "failed to find closest lanelet within route!!!");
     return {};
   }
+
+  // 提取前后一定距离的lane序列
   const auto current_lane_sequence = planner_data_->route_handler->getLaneletSequence(
     current_lane, ego_pose, p.backward_path_length, p.forward_path_length);
-  // expand drivable lanes
+
+  // 搜索附近所有可行的lane
   std::for_each(
     current_lane_sequence.begin(), current_lane_sequence.end(), [&](const auto & lanelet) {
       drivable_lanes.push_back(generateExpandDrivableLanes(lanelet, planner_data_));
@@ -235,6 +237,7 @@ bool SamplingPlannerModule::isReferencePathSafe() const
 
   lanelet::ConstLanelets current_lanes;
 
+  // 提取所有可行的lane
   for (auto & d : drivable_lanes) {
     current_lanes.push_back(d.right_lane);
     current_lanes.push_back(d.left_lane);
@@ -242,20 +245,24 @@ bool SamplingPlannerModule::isReferencePathSafe() const
   }
 
   {
+    // 计算左右边界
     const auto path_for_calculating_bounds = getPreviousModuleOutput().reference_path;
     const auto left_bound = (utils::calcBound(
       path_for_calculating_bounds, planner_data_, drivable_lanes, false, false, false, true));
     const auto right_bound = (utils::calcBound(
       path_for_calculating_bounds, planner_data_, drivable_lanes, false, false, false, false));
 
+    // 创建采样数据
     const auto sampling_planner_data =
       createPlannerData(planner_data_->prev_output_path, left_bound, right_bound);
 
+    // ??
     prepareConstraints(
       internal_params_->constraints, planner_data_->dynamic_object,
       sampling_planner_data.left_bound, sampling_planner_data.right_bound);
   }
 
+  // 将Path转为sampling_path类型
   auto transform_to_sampling_path = [](const PlanResult plan) {
     autoware::sampler_common::Path path;
     for (size_t i = 0; i < plan->points.size(); ++i) {
@@ -273,9 +280,12 @@ bool SamplingPlannerModule::isReferencePathSafe() const
   };
   autoware::sampler_common::Path reference_path =
     transform_to_sampling_path(prev_module_reference_path);
+
+  // 创建footprint
   const auto footprint = autoware::sampler_common::constraints::buildFootprintPoints(
     reference_path, internal_params_->constraints);
 
+  // 判断路径是否安全
   HardConstraintsFunctionVector hard_constraints_reference_path;
   hard_constraints_reference_path.emplace_back(
     [](
@@ -292,11 +302,13 @@ bool SamplingPlannerModule::isReferencePathSafe() const
   return reference_path.constraints_satisfied;
 }
 
+// 检查是否准备好执行规划
 bool SamplingPlannerModule::isExecutionReady() const
 {
   return true;
 }
 
+// 创建规划器数据
 SamplingPlannerData SamplingPlannerModule::createPlannerData(
   const PlanResult & path, const std::vector<geometry_msgs::msg::Point> & left_bound,
   const std::vector<geometry_msgs::msg::Point> & right_bound) const
@@ -310,10 +322,12 @@ SamplingPlannerData SamplingPlannerModule::createPlannerData(
   return data;
 }
 
+// 将Frenet路径转换为带有车道ID的路径
 PathWithLaneId SamplingPlannerModule::convertFrenetPathToPathWithLaneID(
   const autoware::frenet_planner::Path frenet_path, const lanelet::ConstLanelets & lanelets,
   const double path_z)
 {
+  // 从rpy转quat
   auto quaternion_from_rpy = [](double roll, double pitch, double yaw) -> tf2::Quaternion {
     tf2::Quaternion quaternion_tf2;
     quaternion_tf2.setRPY(roll, pitch, yaw);
@@ -325,21 +339,27 @@ PathWithLaneId SamplingPlannerModule::convertFrenetPathToPathWithLaneID(
   const auto reference_path_ptr =
     std::make_shared<PathWithLaneId>(getPreviousModuleOutput().reference_path);
 
+  // 遍历所有frenet点
   for (size_t i = 0; i < frenet_path.points.size(); ++i) {
+
+    // 提取位置和偏航
     const auto & frenet_path_point_position = frenet_path.points.at(i);
     const auto & frenet_path_point_yaw = frenet_path.yaws.at(i);
+
+    // 赋值xyz
     PathPointWithLaneId point{};
     point.point.pose.position.x = frenet_path_point_position.x();
     point.point.pose.position.y = frenet_path_point_position.y();
     point.point.pose.position.z = path_z;
 
+    // 赋值四元数
     auto yaw_as_quaternion = quaternion_from_rpy(0.0, 0.0, frenet_path_point_yaw);
     point.point.pose.orientation.w = yaw_as_quaternion.getW();
     point.point.pose.orientation.x = yaw_as_quaternion.getX();
     point.point.pose.orientation.y = yaw_as_quaternion.getY();
     point.point.pose.orientation.z = yaw_as_quaternion.getZ();
 
-    // put the lane that contain waypoints in lane_ids.
+    // 将包含路径点的车道ID放入lane_ids中
     bool is_in_lanes = false;
     for (const auto & lane : lanelets) {
       if (lanelet::utils::isInLanelet(point.point.pose, lane)) {
@@ -347,10 +367,13 @@ PathWithLaneId SamplingPlannerModule::convertFrenetPathToPathWithLaneID(
         is_in_lanes = true;
       }
     }
-    // If none of them corresponds, assign the previous lane_ids.
+
+    // 如果没有对应的车道，则使用前一个路径点的车道ID
     if (!is_in_lanes && i > 0) {
       point.lane_ids = path.points.at(i - 1).lane_ids;
     }
+
+    // 赋值速度
     if (reference_path_ptr) {
       const auto idx = autoware::motion_utils::findFirstNearestIndexWithSoftConstraints(
         reference_path_ptr->points, point.point.pose);
@@ -358,17 +381,21 @@ PathWithLaneId SamplingPlannerModule::convertFrenetPathToPathWithLaneID(
       point.point.longitudinal_velocity_mps = closest_point.point.longitudinal_velocity_mps;
       point.point.lateral_velocity_mps = closest_point.point.lateral_velocity_mps;
     }
+
+    // 插入一个PathPointWithLaneId
     path.points.push_back(point);
   }
   return path;
 }
 
+// 准备约束条件
 void SamplingPlannerModule::prepareConstraints(
   autoware::sampler_common::Constraints & constraints,
   const PredictedObjects::ConstSharedPtr & predicted_objects,
   const std::vector<geometry_msgs::msg::Point> & left_bound,
   const std::vector<geometry_msgs::msg::Point> & right_bound) const
 {
+  // 障碍物区域
   constraints.obstacle_polygons = autoware::sampler_common::MultiPolygon2d();
   constraints.rtree.clear();
   size_t i = 0;
@@ -382,10 +409,11 @@ void SamplingPlannerModule::prepareConstraints(
     i++;
   }
 
-  constraints.dynamic_obstacles = {};  // TODO(Maxime): not implemented
+  constraints.dynamic_obstacles = {};  // TODO(Maxime): 未实现
 
-  // TODO(Maxime): directly use lines instead of polygon
+  // TODO(Maxime): 直接使用线段而不是多边形
 
+  // 可行驶区域
   autoware::sampler_common::Polygon2d drivable_area_polygon;
   for (const auto & p : right_bound) {
     drivable_area_polygon.outer().emplace_back(p.x, p.y);
@@ -401,13 +429,17 @@ void SamplingPlannerModule::prepareConstraints(
   constraints.drivable_polygons = {drivable_area_polygon};
 }
 
+// 规划路径
 BehaviorModuleOutput SamplingPlannerModule::plan()
 {
+  // 获取参考线
   const auto reference_path_ptr =
     std::make_shared<PathWithLaneId>(getPreviousModuleOutput().reference_path);
   if (reference_path_ptr->points.empty()) {
     return {};
   }
+
+  // lambda: 虽然是spline，其实是提取xy
   auto reference_spline = [&]() -> autoware::sampler_common::transform::Spline2D {
     std::vector<double> x;
     std::vector<double> y;
@@ -423,11 +455,17 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
   autoware::frenet_planner::FrenetState frenet_initial_state;
   autoware::frenet_planner::SamplingParameters sampling_parameters;
 
+  // 获取当前位姿
   const auto & pose = planner_data_->self_odometry->pose.pose;
+
+  // 将当前位姿转换为另一种形式
   autoware::sampler_common::State initial_state = getInitialState(pose, reference_spline);
+
+  // 获取采样参数
   sampling_parameters =
     prepareSamplingParameters(initial_state, reference_spline, *internal_params_);
 
+  // lambda: 提取frenet初始状态
   auto set_frenet_state = [](
                             const autoware::sampler_common::State & initial_state,
                             const autoware::sampler_common::transform::Spline2D & reference_spline,
@@ -456,14 +494,17 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
     }
   };
 
+  // 将当前状态映射到frenet坐标系
   set_frenet_state(initial_state, reference_spline, frenet_initial_state);
 
+  // 提取path
   const auto prev_module_path = std::make_shared<PathWithLaneId>(getPreviousModuleOutput().path);
 
   const auto & p = planner_data_->parameters;
   const auto ego_pose = planner_data_->self_odometry->pose.pose;
   lanelet::ConstLanelet current_lane;
 
+  // 提取当前Lane
   if (!planner_data_->route_handler->getClosestLaneletWithinRoute(ego_pose, &current_lane)) {
     RCLCPP_ERROR(
       rclcpp::get_logger("behavior_path_planner").get_child("utils"),
@@ -471,6 +512,7 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
     return getPreviousModuleOutput();
   }
 
+  // 提取周围的lane
   std::vector<DrivableLanes> drivable_lanes{};
   const auto current_lane_sequence = planner_data_->route_handler->getLaneletSequence(
     current_lane, ego_pose, p.backward_path_length, p.forward_path_length);
@@ -483,12 +525,14 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
 
   lanelet::ConstLanelets current_lanes;
 
+  // 进一步提取lane
   for (auto & d : drivable_lanes) {
     current_lanes.push_back(d.right_lane);
     current_lanes.push_back(d.left_lane);
     current_lanes.insert(current_lanes.end(), d.middle_lanes.begin(), d.middle_lanes.end());
   }
 
+  // 提取目标位姿
   auto get_goal_pose = [&]() {
     auto goal_pose = planner_data_->route_handler->getGoalPose();
     if (!std::any_of(current_lanes.begin(), current_lanes.end(), [&](const auto & lane) {
@@ -513,10 +557,15 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
 
   std::vector<autoware::frenet_planner::Path> frenet_paths;
   // Extend prev path
+
+  // 如果之前的路径合理，并且需要延展frenet_path
   if (prev_path_is_valid && is_extend_previous_path) {
+
+    // 提取之前的frenet数据
     autoware::frenet_planner::Path prev_path_frenet = prev_sampling_path_.value();
     frenet_paths.push_back(prev_path_frenet);
 
+    // lambda: 提取begin()到begin() + offset的子路径
     auto get_subset = [](
                         const autoware::frenet_planner::Path & path,
                         size_t offset) -> autoware::frenet_planner::Path {
@@ -529,9 +578,11 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
       return s;
     };
 
+    // 获取初始位姿
     autoware::sampler_common::State current_state;
     current_state.pose = {ego_pose.position.x, ego_pose.position.y};
 
+    // 计算之前frenet路径和当前位姿的最近索引值
     const auto closest_iter = std::min_element(
       prev_path_frenet.points.begin(), prev_path_frenet.points.end() - 1,
       [&](const auto & p1, const auto & p2) {
@@ -539,10 +590,13 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
                boost::geometry::distance(p2, current_state.pose);
       });
 
+      // 
     const auto current_idx = std::distance(prev_path_frenet.points.begin(), closest_iter);
     const double current_length = prev_path_frenet.lengths.at(current_idx);
     const double remaining_path_length = prev_path_frenet.lengths.back() - current_length;
     const double length_step = remaining_path_length / path_divisions;
+
+    // 从前往后遍历获取可重复使用的路径
     for (double reuse_length = 0.0; reuse_length <= remaining_path_length;
          reuse_length += length_step) {
       size_t reuse_idx;
@@ -553,6 +607,7 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
 
       const auto reused_path = get_subset(prev_path_frenet, reuse_idx);
 
+      // 计算断点
       geometry_msgs::msg::Pose future_pose = reused_path.poses.back();
       autoware::sampler_common::State future_state = getInitialState(future_pose, reference_spline);
       autoware::frenet_planner::FrenetState frenet_reuse_state;
@@ -560,30 +615,40 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
       set_frenet_state(future_state, reference_spline, frenet_reuse_state);
       autoware::frenet_planner::SamplingParameters extension_sampling_parameters =
         prepareSamplingParameters(future_state, reference_spline, *internal_params_);
+      
+      // 从断电开始计算剩余的frenet路径 （核心算法）
       auto extension_frenet_paths = autoware::frenet_planner::generatePaths(
         reference_spline, frenet_reuse_state, extension_sampling_parameters);
+
+      // 将剩余的frenet路径插入到frenet_paths
       for (auto & path : extension_frenet_paths) {
         if (!path.points.empty()) frenet_paths.push_back(reused_path.extend(path));
       }
     }
-  } else {
+  } 
+  // 如果之前的路径不存在，直接生成新的frenet_path （核心算法）
+  else {
     frenet_paths = autoware::frenet_planner::generatePaths(
       reference_spline, frenet_initial_state, sampling_parameters);
   }
 
+  // 再次提取参考路径，并提取左右边界
   const auto path_for_calculating_bounds = getPreviousModuleOutput().reference_path;
   const auto left_bound = (utils::calcBound(
     path_for_calculating_bounds, planner_data_, drivable_lanes, false, false, false, true));
   const auto right_bound = (utils::calcBound(
     path_for_calculating_bounds, planner_data_, drivable_lanes, false, false, false, false));
 
+  // 创建采样路径
   const auto sampling_planner_data =
     createPlannerData(planner_data_->prev_output_path, left_bound, right_bound);
 
+  // 准备约束
   prepareConstraints(
     internal_params_->constraints, planner_data_->dynamic_object, sampling_planner_data.left_bound,
     sampling_planner_data.right_bound);
 
+  // 计算软性约束输入？
   SoftConstraintsInputs soft_constraints_input;
   const auto & goal_pose = get_goal_pose();
   soft_constraints_input.goal_pose = soft_constraints_input.ego_pose =
@@ -600,6 +665,8 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
   soft_constraints_input.closest_lanelets_to_goal = {closest_lanelet_to_goal};
 
   debug_data_.footprints.clear();
+
+  // 评估frenet_path
   std::vector<std::vector<double>> soft_constraints_results_full;
   for (auto & path : frenet_paths) {
     const auto footprint = autoware::sampler_common::constraints::buildFootprintPoints(
@@ -612,19 +679,22 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
     soft_constraints_results_full.push_back(soft_constraints_results);
   }
 
+  // 将frenet_paths深复制到candidate_paths
   std::vector<autoware::sampler_common::Path> candidate_paths;
   const auto move_to_paths = [&candidate_paths](auto & paths_to_move) {
     candidate_paths.insert(
       candidate_paths.end(), std::make_move_iterator(paths_to_move.begin()),
       std::make_move_iterator(paths_to_move.end()));
   };
-
   move_to_paths(frenet_paths);
+
+  // 使用candidate_paths更新debug数据
   debug_data_.previous_sampled_candidates_nb = debug_data_.sampled_candidates.size();
   debug_data_.sampled_candidates = candidate_paths;
   debug_data_.obstacles = internal_params_->constraints.obstacle_polygons;
   updateDebugMarkers();
 
+  // 筛选出代价最低的frenet_path
   const double max_length = *std::max_element(
     internal_params_->sampling.target_lengths.begin(),
     internal_params_->sampling.target_lengths.end());
@@ -643,10 +713,11 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
     return min_cost < std::numeric_limits<double>::max() ? std::optional<size_t>(best_path_idx)
                                                          : std::nullopt;
   };
-
   const auto selected_path_idx = best_path_idx(frenet_paths);
 
+  // 如果没有代价最低的frenet_path
   if (!selected_path_idx) {
+    // 直接输出上一条结果
     BehaviorModuleOutput out;
     PathWithLaneId out_path = (prev_sampling_path_)
                                 ? convertFrenetPathToPathWithLaneID(
@@ -661,8 +732,10 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
     return out;
   }
 
+  // 提取代价最低的frenet_path
   const auto best_path = frenet_paths[*selected_path_idx];
 
+  // 打印信息
   std::cerr << "Soft constraints results of best: ";
   for (const auto result : soft_constraints_results_full[*selected_path_idx])
     std::cerr << result << ",";
@@ -677,14 +750,21 @@ BehaviorModuleOutput SamplingPlannerModule::plan()
 
   std::cerr << "road_lanes size " << road_lanes.size() << "\n";
   std::cerr << "First lane ID size " << out_path.points.at(0).lane_ids.size() << "\n";
+
+  // 填充结果
   BehaviorModuleOutput out;
   out.path = out_path;
   out.reference_path = *reference_path_ptr;
   out.drivable_area_info = getPreviousModuleOutput().drivable_area_info;
+
+  // 扩展可行使区域
   extendOutputDrivableArea(out, drivable_lanes);
+
+  // 返回结果
   return out;
 }
 
+// 更新调试标记
 void SamplingPlannerModule::updateDebugMarkers()
 {
   debug_marker_.markers.clear();
@@ -759,26 +839,29 @@ void SamplingPlannerModule::updateDebugMarkers()
   }
 }
 
+// 扩展输出可行驶区域
 void SamplingPlannerModule::extendOutputDrivableArea(
   BehaviorModuleOutput & output, std::vector<DrivableLanes> & drivable_lanes)
 {
-  // // for new architecture
+  // 用于新架构
   DrivableAreaInfo current_drivable_area_info;
   current_drivable_area_info.drivable_lanes = drivable_lanes;
   output.drivable_area_info = utils::combineDrivableAreaInfo(
     current_drivable_area_info, getPreviousModuleOutput().drivable_area_info);
 }
 
+// 规划候选路径
 CandidateOutput SamplingPlannerModule::planCandidate() const
 {
   return {};
 }
 
+// 更新数据
 void SamplingPlannerModule::updateData()
 {
 }
 
-// utils
+// 工具函数
 
 template <typename T>
 void pushUniqueVector(T & base_vector, const T & additional_vector)
@@ -786,6 +869,7 @@ void pushUniqueVector(T & base_vector, const T & additional_vector)
   base_vector.insert(base_vector.end(), additional_vector.begin(), additional_vector.end());
 }
 
+// 检查车道终点是否连接
 bool SamplingPlannerModule::isEndPointsConnected(
   const lanelet::ConstLanelet & left_lane, const lanelet::ConstLanelet & right_lane) const
 {
@@ -796,6 +880,7 @@ bool SamplingPlannerModule::isEndPointsConnected(
   return (right_back_point_2d - left_back_point_2d).norm() < epsilon;
 }
 
+// 生成扩展的可行驶车道
 DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   const lanelet::ConstLanelet & lanelet,
   const std::shared_ptr<const PlannerData> & planner_data) const
@@ -806,7 +891,7 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   current_drivable_lanes.left_lane = lanelet;
   current_drivable_lanes.right_lane = lanelet;
 
-  // 1. get left/right side lanes
+  // 1. 获取左/右侧车道
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
     const auto all_left_lanelets =
       route_handler->getAllLeftSharedLinestringLanelets(target_lane, true, true);
@@ -831,7 +916,7 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   update_left_lanelets(lanelet);
   update_right_lanelets(lanelet);
 
-  // 2.1 when there are multiple lanes whose previous lanelet is the same
+  // 2.1 当存在多个车道的前一个车道相同时
   const auto get_next_lanes_from_same_previous_lane =
     [&route_handler](const lanelet::ConstLanelet & lane) {
       // get previous lane, and return false if previous lane does not exist
@@ -853,8 +938,7 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   const auto next_lanes_for_left =
     get_next_lanes_from_same_previous_lane(current_drivable_lanes.left_lane);
 
-  // 2.2 look for neighbor lane recursively, where end line of the lane is connected to end line
-  // of the original lane
+  // 2.2 递归查找相邻车道，其中车道的终点与原始车道的终点相连
   const auto update_drivable_lanes =
     [&](const lanelet::ConstLanelets & next_lanes, const bool is_left) {
       for (const auto & next_lane : next_lanes) {
@@ -900,7 +984,7 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
 
   const auto expand_drivable_area_recursively =
     [&](const lanelet::ConstLanelets & next_lanes, const bool is_left) {
-      // NOTE: set max search num to avoid infinity loop for drivable area expansion
+      // 注意：设置最大搜索次数以避免无限循环
       constexpr size_t max_recursive_search_num = 3;
       for (size_t i = 0; i < max_recursive_search_num; ++i) {
         const bool is_update_kept = update_drivable_lanes(next_lanes, is_left);
@@ -917,11 +1001,11 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   expand_drivable_area_recursively(next_lanes_for_right, false);
   expand_drivable_area_recursively(next_lanes_for_left, true);
 
-  // 3. update again for new left/right lanes
+  // 3. 再次更新新的左/右车道
   update_left_lanelets(current_drivable_lanes.left_lane);
   update_right_lanelets(current_drivable_lanes.right_lane);
 
-  // 4. compensate that current_lane is in either of left_lane, right_lane or middle_lanes.
+  // 4. 确保当前车道在左车道、右车道或中间车道中
   if (
     current_drivable_lanes.left_lane.id() != lanelet.id() &&
     current_drivable_lanes.right_lane.id() != lanelet.id()) {
@@ -931,12 +1015,13 @@ DrivableLanes SamplingPlannerModule::generateExpandDrivableLanes(
   return current_drivable_lanes;
 }
 
+// 准备采样参数
 autoware::frenet_planner::SamplingParameters SamplingPlannerModule::prepareSamplingParameters(
   const autoware::sampler_common::State & initial_state,
   const autoware::sampler_common::transform::Spline2D & path_spline,
   const SamplingPlannerInternalParameters & params_)
 {
-  // calculate target lateral positions
+  // 计算目标横向位置
   std::vector<double> target_lateral_positions;
   if (params_.sampling.nb_target_lateral_positions > 1) {
     target_lateral_positions = {0.0, initial_state.frenet.d};
