@@ -42,6 +42,8 @@
 
 namespace
 {
+
+// 计算线段索引
 size_t calcPointIndexFromSegmentIndex(
   const std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> & points,
   const geometry_msgs::msg::Point & point, const size_t seg_idx)
@@ -122,12 +124,14 @@ size_t calcSegmentIndexFromPointIndex(
   return idx - 1;
 }
 
+// 计算偏移点
 Point2d calculateOffsetPoint2d(
   const geometry_msgs::msg::Pose & pose, const double offset_x, const double offset_y)
 {
   return to_bg2d(calc_offset_pose(pose, offset_x, offset_y, 0.0));
 }
 
+// 创建检测区域多边形
 bool createDetectionAreaPolygons(
   Polygons2d & da_polys, const PathWithLaneId & path, const geometry_msgs::msg::Pose & target_pose,
   const size_t target_seg_idx, const DetectionRange & da_range, const double obstacle_vel_mps,
@@ -230,6 +234,7 @@ bool createDetectionAreaPolygons(
   return true;
 }
 
+// 提取接近的分区
 void extractClosePartition(
   const geometry_msgs::msg::Point position, const BasicPolygons2d & all_partitions,
   BasicPolygons2d & close_partition, const double distance_thresh)
@@ -242,6 +247,7 @@ void extractClosePartition(
   }
 }
 
+// 获取所有分区的车道
 void getAllPartitionLanelets(const lanelet::LaneletMapConstPtr & ll, BasicPolygons2d & polys)
 {
   const lanelet::ConstLineStrings3d partitions = lanelet::utils::query::getAllPartitions(ll);
@@ -256,6 +262,7 @@ void getAllPartitionLanelets(const lanelet::LaneletMapConstPtr & ll, BasicPolygo
   }
 }
 
+// 从指定索引开始设置速度
 void setVelocityFromIndex(const size_t begin_idx, const double vel, PathWithLaneId * input)
 {
   for (size_t i = begin_idx; i < input->points.size(); ++i) {
@@ -264,6 +271,7 @@ void setVelocityFromIndex(const size_t begin_idx, const double vel, PathWithLane
   }
 }
 
+// 插入速度点
 void insertVelocity(
   PathWithLaneId & path, const PathPointWithLaneId & path_point, const double v,
   size_t & insert_index, const double min_distance)
@@ -290,6 +298,7 @@ void insertVelocity(
   setVelocityFromIndex(insert_index, v, &path);
 }
 
+// 判断目标是否在前方
 bool isAheadOf(const geometry_msgs::msg::Pose & target, const geometry_msgs::msg::Pose & origin)
 {
   geometry_msgs::msg::Pose p = transformRelCoordinate2D(target, origin);
@@ -297,6 +306,7 @@ bool isAheadOf(const geometry_msgs::msg::Pose & target, const geometry_msgs::msg
   return is_target_ahead;
 }
 
+// 获取前方的位姿
 geometry_msgs::msg::Pose getAheadPose(
   const size_t start_idx, const double ahead_dist,
   const autoware_internal_planning_msgs::msg::PathWithLaneId & path)
@@ -331,6 +341,7 @@ geometry_msgs::msg::Pose getAheadPose(
   return path.points.back().point.pose;
 }
 
+// 生成路径多边形
 Polygon2d generatePathPolygon(
   const PathWithLaneId & path, const size_t start_idx, const size_t end_idx, const double width)
 {
@@ -352,6 +363,7 @@ Polygon2d generatePathPolygon(
   return ego_area;
 }
 
+// 计算判断线距离（考虑加速度限制）
 double calcJudgeLineDistWithAccLimit(
   const double velocity, const double max_stop_acceleration, const double delay_response_time)
 {
@@ -360,6 +372,7 @@ double calcJudgeLineDistWithAccLimit(
   return judge_line_dist;
 }
 
+// 计算判断线距离（考虑加速度和冲击限制）
 double calcJudgeLineDistWithJerkLimit(
   const double velocity, const double acceleration, const double max_stop_acceleration,
   const double max_stop_jerk, const double delay_response_time)
@@ -397,6 +410,7 @@ double calcJudgeLineDistWithJerkLimit(
   return std::max(0.0, x1 + x2 + x3);
 }
 
+// 计算达到目标距离的时间
 double findReachTime(
   const double jerk, const double accel, const double velocity, const double distance,
   const double t_min, const double t_max)
@@ -439,6 +453,7 @@ double findReachTime(
   return t;
 }
 
+// 计算从当前速度减速到目标距离的速度
 double calcDecelerationVelocityFromDistanceToTarget(
   const double max_slowdown_jerk, const double max_slowdown_accel, const double current_accel,
   const double current_velocity, const double distance_to_target)
@@ -483,6 +498,7 @@ double calcDecelerationVelocityFromDistanceToTarget(
   return vt(t_acc, 0.0, a_max, v1);
 }
 
+// 将预测对象转换为ROS点
 std::vector<geometry_msgs::msg::Point> toRosPoints(const PredictedObjects & object)
 {
   std::vector<geometry_msgs::msg::Point> points;
@@ -492,6 +508,7 @@ std::vector<geometry_msgs::msg::Point> toRosPoints(const PredictedObjects & obje
   return points;
 }
 
+// 延伸线段
 LineString2d extendLine(
   const lanelet::ConstPoint3d & lanelet_point1, const lanelet::ConstPoint3d & lanelet_point2,
   const double & length)
@@ -503,6 +520,7 @@ LineString2d extendLine(
     {(p1 - length * t).x(), (p1 - length * t).y()}, {(p2 + length * t).x(), (p2 + length * t).y()}};
 }
 
+// 获取最近的车道ID
 std::optional<int64_t> getNearestLaneId(
   const PathWithLaneId & path, const lanelet::LaneletMapPtr lanelet_map,
   const geometry_msgs::msg::Pose & current_pose)
@@ -520,6 +538,7 @@ std::optional<int64_t> getNearestLaneId(
   return std::nullopt;
 }
 
+// 获取路径上的车道
 std::vector<lanelet::ConstLanelet> getLaneletsOnPath(
   const PathWithLaneId & path, const lanelet::LaneletMapPtr lanelet_map,
   const geometry_msgs::msg::Pose & current_pose)
@@ -547,6 +566,7 @@ std::vector<lanelet::ConstLanelet> getLaneletsOnPath(
   return lanelets;
 }
 
+// 获取路径上的车道ID集合
 std::set<int64_t> getLaneIdSetOnPath(
   const PathWithLaneId & path, const lanelet::LaneletMapPtr lanelet_map,
   const geometry_msgs::msg::Pose & current_pose)
@@ -559,6 +579,7 @@ std::set<int64_t> getLaneIdSetOnPath(
   return lane_id_set;
 }
 
+// 获取路径上的排序车道ID
 std::vector<int64_t> getSortedLaneIdsFromPath(const PathWithLaneId & path)
 {
   std::vector<int64_t> sorted_lane_ids;
@@ -573,6 +594,7 @@ std::vector<int64_t> getSortedLaneIdsFromPath(const PathWithLaneId & path)
   return sorted_lane_ids;
 }
 
+// 获取路径上的后续车道ID
 std::vector<int64_t> getSubsequentLaneIdsSetOnPath(
   const PathWithLaneId & path, int64_t base_lane_id)
 {
@@ -590,6 +612,7 @@ std::vector<int64_t> getSubsequentLaneIdsSetOnPath(
   return subsequent_lane_ids;
 }
 
+// 判断是否超过线段
 // TODO(murooka) remove calcSignedArcLength using findNearestSegmentIndex
 bool isOverLine(
   const autoware_internal_planning_msgs::msg::PathWithLaneId & path,
@@ -602,6 +625,7 @@ bool isOverLine(
          0.0;
 }
 
+// 插入减速点
 std::optional<geometry_msgs::msg::Pose> insertDecelPoint(
   const geometry_msgs::msg::Point & stop_point, PathWithLaneId & output,
   const float target_velocity)
@@ -626,6 +650,7 @@ std::optional<geometry_msgs::msg::Pose> insertDecelPoint(
   return autoware_utils::get_pose(output.points.at(insert_idx.value()));
 }
 
+// 插入停止点
 // TODO(murooka): remove this function for u-turn and crossing-path
 std::optional<geometry_msgs::msg::Pose> insertStopPoint(
   const geometry_msgs::msg::Point & stop_point, PathWithLaneId & output)
@@ -642,6 +667,7 @@ std::optional<geometry_msgs::msg::Pose> insertStopPoint(
   return autoware_utils::get_pose(output.points.at(insert_idx.value()));
 }
 
+// 插入停止点（指定线段索引）
 std::optional<geometry_msgs::msg::Pose> insertStopPoint(
   const geometry_msgs::msg::Point & stop_point, const size_t stop_seg_idx, PathWithLaneId & output)
 {
@@ -655,6 +681,7 @@ std::optional<geometry_msgs::msg::Pose> insertStopPoint(
   return autoware_utils::get_pose(output.points.at(insert_idx.value()));
 }
 
+// 获取关联的交叉路口车道
 std::set<lanelet::Id> getAssociativeIntersectionLanelets(
   const lanelet::ConstLanelet & lane, const lanelet::LaneletMapPtr lanelet_map,
   const lanelet::routing::RoutingGraphPtr routing_graph)
@@ -684,6 +711,7 @@ std::set<lanelet::Id> getAssociativeIntersectionLanelets(
   return associative_intersection_lanelets;
 }
 
+// 从ID集合中获取车道
 lanelet::ConstLanelets getConstLaneletsFromIds(
   const lanelet::LaneletMapConstPtr & map, const std::set<lanelet::Id> & ids)
 {

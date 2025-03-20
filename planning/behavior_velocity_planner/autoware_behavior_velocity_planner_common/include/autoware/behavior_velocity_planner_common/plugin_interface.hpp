@@ -29,11 +29,19 @@ class PluginInterface
 {
 public:
   virtual ~PluginInterface() = default;
+
+  // 初始化插件
   virtual void init(rclcpp::Node & node) = 0;
+
+  // 执行速度规划
   virtual void plan(autoware_internal_planning_msgs::msg::PathWithLaneId * path) = 0;
+
+  // 更新场景模块实例
   virtual void updateSceneModuleInstances(
     const std::shared_ptr<const PlannerData> & planner_data,
     const autoware_internal_planning_msgs::msg::PathWithLaneId & path) = 0;
+
+  // 获取模块名称
   virtual const char * getModuleName() = 0;
 };
 

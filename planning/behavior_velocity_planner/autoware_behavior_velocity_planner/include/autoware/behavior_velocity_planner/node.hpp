@@ -82,10 +82,12 @@ private:
   autoware_utils::InterProcessPollingSubscriber<nav_msgs::msg::OccupancyGrid> sub_occupancy_grid_{
     this, "~/input/occupancy_grid"};
 
+  // 订阅车道地图
   autoware_utils::InterProcessPollingSubscriber<
     LaneletMapBin, autoware_utils::polling_policy::Newest>
     sub_lanelet_map_{this, "~/input/vector_map", rclcpp::QoS{1}.transient_local()};
 
+  // 订阅外部速度限制
   autoware_utils::InterProcessPollingSubscriber<VelocityLimit> sub_external_velocity_limit_{
     this, "~/input/external_velocity_limit_mps", rclcpp::QoS{1}.transient_local()};
 

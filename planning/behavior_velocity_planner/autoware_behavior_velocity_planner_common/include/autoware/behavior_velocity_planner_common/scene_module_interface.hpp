@@ -120,53 +120,71 @@ template <class T = SceneModuleInterface>
 class SceneModuleManagerInterface
 {
 public:
+
+// 场景模块管理器接口的构造函数
   SceneModuleManagerInterface(rclcpp::Node & node, [[maybe_unused]] const char * module_name)
   : node_(node), clock_(node.get_clock()), logger_(node.get_logger())
   {
+    // 调试信息发布器
     const auto ns = std::string("~/debug/") + module_name;
     pub_debug_ = node.create_publisher<visualization_msgs::msg::MarkerArray>(ns, 1);
+
+    // 调试路径发布器
     if (!node.has_parameter("is_publish_debug_path")) {
       is_publish_debug_path_ = node.declare_parameter<bool>("is_publish_debug_path");
     } else {
       is_publish_debug_path_ = node.get_parameter("is_publish_debug_path").as_bool();
     }
+
+    // 调试带lane_id的路径
     if (is_publish_debug_path_) {
       pub_debug_path_ = node.create_publisher<autoware_internal_planning_msgs::msg::PathWithLaneId>(
         std::string("~/debug/path_with_lane_id/") + module_name, 1);
     }
+
+    // 虚拟墙发布器
     pub_virtual_wall_ = node.create_publisher<visualization_msgs::msg::MarkerArray>(
       std::string("~/virtual_wall/") + module_name, 5);
+
+    // ？？
     planning_factor_interface_ =
       std::make_shared<planning_factor_interface::PlanningFactorInterface>(&node, module_name);
 
+    // 处理时间发布器
     processing_time_publisher_ = std::make_shared<DebugPublisher>(&node, "~/debug");
 
+    // 详细处理时间发布器
     pub_processing_time_detail_ = node.create_publisher<autoware_utils::ProcessingTimeDetail>(
       "~/debug/processing_time_detail_ms/" + std::string(module_name), 1);
 
-    time_keeper_ = std::make_shared<autoware_utils::TimeKeeper>(pub_processing_time_detail_);
+    // 时间记录器
+    time_keeper_ = std::make_shared<autoware_utils::TimeKeeper>(pub_processing_time_detail_); 
   }
 
   virtual ~SceneModuleManagerInterface() = default;
 
   virtual const char * getModuleName() = 0;
 
+  // 更新场景模块实例
   void updateSceneModuleInstances(
     const std::shared_ptr<const PlannerData> & planner_data,
     const autoware_internal_planning_msgs::msg::PathWithLaneId & path)
   {
     planner_data_ = planner_data;
 
-    launchNewModules(path);
-    deleteExpiredModules(path);
+    launchNewModules(path); // 启动新模块
+    deleteExpiredModules(path); // 删除过期模块
   }
 
+  // 规划路径
   virtual void plan(autoware_internal_planning_msgs::msg::PathWithLaneId * path)
   {
     modifyPathVelocity(path);
   }
 
 protected:
+
+  // 修改路径速度
   virtual void modifyPathVelocity(autoware_internal_planning_msgs::msg::PathWithLaneId * path)
   {
     autoware_utils::ScopedTimeTrack st(
@@ -175,11 +193,16 @@ protected:
     stop_watch.tic("Total");
     visualization_msgs::msg::MarkerArray debug_marker_array;
 
+    // 遍历所有模块
     for (const auto & scene_module : scene_modules_) {
+
+      // 更新数据
       scene_module->setPlannerData(planner_data_);
+
+      // 修改速度
       scene_module->modifyPathVelocity(path);
 
-      // The velocity factor must be called after modifyPathVelocity.
+      // 必须在调用modifyPathVelocity之后调用速度因素
 
       for (const auto & marker : scene_module->createDebugMarkerArray().markers) {
         debug_marker_array.markers.push_back(marker);
@@ -188,6 +211,7 @@ protected:
       virtual_wall_marker_creator_.add_virtual_walls(scene_module->createVirtualWalls());
     }
 
+    // 发布调试信息
     planning_factor_interface_->publish();
     pub_debug_->publish(debug_marker_array);
     if (is_publish_debug_path_) {
@@ -207,14 +231,18 @@ protected:
   virtual std::function<bool(const std::shared_ptr<T> &)> getModuleExpiredFunction(
     const autoware_internal_planning_msgs::msg::PathWithLaneId & path) = 0;
 
+  // 删除过期模块
   virtual void deleteExpiredModules(
     const autoware_internal_planning_msgs::msg::PathWithLaneId & path)
   {
     const auto isModuleExpired = getModuleExpiredFunction(path);
 
+    // 遍历所有模块
     auto itr = scene_modules_.begin();
     while (itr != scene_modules_.end()) {
+      // 如果模块过期
       if (isModuleExpired(*itr)) {
+        // 删除模块
         registered_module_id_set_.erase((*itr)->getModuleId());
         itr = scene_modules_.erase(itr);
       } else {
@@ -228,6 +256,7 @@ protected:
     return registered_module_id_set_.count(module_id) != 0;
   }
 
+  // 注册模块
   void registerModule(const std::shared_ptr<T> & scene_module)
   {
     RCLCPP_DEBUG(
@@ -237,6 +266,7 @@ protected:
     scene_modules_.insert(scene_module);
   }
 
+  // 查找自车所在路径段的索引
   size_t findEgoSegmentIndex(
     const std::vector<autoware_internal_planning_msgs::msg::PathPointWithLaneId> & points) const
   {

@@ -25,20 +25,26 @@
 
 namespace autoware::behavior_velocity_planner
 {
+  // BehaviorVelocityPlannerManager 构造函数
 BehaviorVelocityPlannerManager::BehaviorVelocityPlannerManager()
 : plugin_loader_(
     "autoware_behavior_velocity_planner", "autoware::behavior_velocity_planner::PluginInterface")
 {
+  // 初始化插件加载器，用于动态加载行为速度规划器的插件
 }
 
+// 启动场景插件
 void BehaviorVelocityPlannerManager::launchScenePlugin(
   rclcpp::Node & node, const std::string & name)
 {
+  // 检查插件是否可用
   if (plugin_loader_.isClassAvailable(name)) {
-    const auto plugin = plugin_loader_.createSharedInstance(name);
-    plugin->init(node);
 
-    // Check if the plugin is already registered.
+    // 创建插件实例
+    const auto plugin = plugin_loader_.createSharedInstance(name);
+    plugin->init(node); // 初始化插件
+
+    // 检查插件是否已经注册
     for (const auto & running_plugin : scene_manager_plugins_) {
       if (plugin->getModuleName() == running_plugin->getModuleName()) {
         RCLCPP_WARN_STREAM(node.get_logger(), "The plugin '" << name << "' is already loaded.");
@@ -46,7 +52,7 @@ void BehaviorVelocityPlannerManager::launchScenePlugin(
       }
     }
 
-    // register
+    // 注册插件
     scene_manager_plugins_.push_back(plugin);
     RCLCPP_DEBUG_STREAM(node.get_logger(), "The scene plugin '" << name << "' is loaded.");
   } else {
@@ -54,9 +60,11 @@ void BehaviorVelocityPlannerManager::launchScenePlugin(
   }
 }
 
+// 移除场景插件
 void BehaviorVelocityPlannerManager::removeScenePlugin(
   rclcpp::Node & node, const std::string & name)
 {
+  // 查找并移除指定名称的插件
   auto it = std::remove_if(
     scene_manager_plugins_.begin(), scene_manager_plugins_.end(),
     [&](const std::shared_ptr<behavior_velocity_planner::PluginInterface> plugin) {
@@ -73,6 +81,7 @@ void BehaviorVelocityPlannerManager::removeScenePlugin(
   }
 }
 
+// 规划路径速度
 autoware_internal_planning_msgs::msg::PathWithLaneId
 BehaviorVelocityPlannerManager::planPathVelocity(
   const std::shared_ptr<const PlannerData> & planner_data,
@@ -80,6 +89,7 @@ BehaviorVelocityPlannerManager::planPathVelocity(
 {
   autoware_internal_planning_msgs::msg::PathWithLaneId output_path_msg = input_path_msg;
 
+  // 遍历所有场景插件，更新场景模块实例并规划路径速度
   for (const auto & plugin : scene_manager_plugins_) {
     plugin->updateSceneModuleInstances(planner_data, input_path_msg);
     plugin->plan(&output_path_msg);

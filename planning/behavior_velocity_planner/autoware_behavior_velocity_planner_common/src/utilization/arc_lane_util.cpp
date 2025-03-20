@@ -28,27 +28,29 @@
 
 #include <utility>
 
+// 重载+运算符，用于计算两个点的和
 namespace
 {
 geometry_msgs::msg::Point operator+(
   const geometry_msgs::msg::Point & p1, const geometry_msgs::msg::Point & p2)
 {
-  geometry_msgs::msg::Point p;
-  p.x = p1.x + p2.x;
-  p.y = p1.y + p2.y;
-  p.z = p1.z + p2.z;
+  geometry_msgs::msg::Point p;  // 定义一个点p
+  p.x = p1.x + p2.x;  // 计算x坐标
+  p.y = p1.y + p2.y;  // 计算y坐标
+  p.z = p1.z + p2.z;  // 计算z坐标
 
-  return p;
+  return p; // 返回结果点
 }
 
+// 重载*运算符，用于计算点与标量的乘积
 geometry_msgs::msg::Point operator*(const geometry_msgs::msg::Point & p, const double v)
 {
-  geometry_msgs::msg::Point multiplied_p;
-  multiplied_p.x = p.x * v;
-  multiplied_p.y = p.y * v;
-  multiplied_p.z = p.z * v;
+  geometry_msgs::msg::Point multiplied_p; // 定义一个点multiplied_p
+  multiplied_p.x = p.x * v; // 计算x坐标
+  multiplied_p.y = p.y * v; // 计算y坐标
+  multiplied_p.z = p.z * v; // 计算z坐标
 
-  return multiplied_p;
+  return multiplied_p;  // 返回结果点
 }
 
 }  // namespace
@@ -56,74 +58,80 @@ geometry_msgs::msg::Point operator*(const geometry_msgs::msg::Point & p, const d
 namespace autoware::behavior_velocity_planner::arc_lane_utils
 {
 
+  // 计算两个点之间的有符号距离
 double calcSignedDistance(const geometry_msgs::msg::Pose & p1, const geometry_msgs::msg::Point & p2)
 {
-  Eigen::Affine3d map2p1;
-  tf2::fromMsg(p1, map2p1);
-  const auto basecoords_p2 = map2p1.inverse() * Eigen::Vector3d(p2.x, p2.y, p2.z);
-  return basecoords_p2.x() >= 0 ? basecoords_p2.norm() : -basecoords_p2.norm();
+  Eigen::Affine3d map2p1; // 定义一个仿射变换
+  tf2::fromMsg(p1, map2p1); // 将p1转换为仿射变换
+  const auto basecoords_p2 = map2p1.inverse() * Eigen::Vector3d(p2.x, p2.y, p2.z);  // 计算p2在p1坐标系下的坐标
+  return basecoords_p2.x() >= 0 ? basecoords_p2.norm() : -basecoords_p2.norm(); // 返回有符号距离
 }
 
 // calculate one collision point between the line (from p1 to p2) and the line (from p3 to p4)
 
+// 计算两条线段的交点
 std::optional<geometry_msgs::msg::Point> checkCollision(
   const geometry_msgs::msg::Point & p1, const geometry_msgs::msg::Point & p2,
   const geometry_msgs::msg::Point & p3, const geometry_msgs::msg::Point & p4)
 {
-  const double det = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+  const double det = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x); // 计算行列式
 
   if (det == 0.0) {
-    // collision is not one point.
+    // 如果行列式为0，说明两条线段平行或重合，没有唯一交点
     return std::nullopt;
   }
 
-  const double t1 = ((p4.y - p3.y) * (p4.x - p1.x) - (p4.x - p3.x) * (p4.y - p1.y)) / det;
-  const double t2 = ((p2.x - p1.x) * (p4.y - p1.y) - (p2.y - p1.y) * (p4.x - p1.x)) / det;
+  const double t1 = ((p4.y - p3.y) * (p4.x - p1.x) - (p4.x - p3.x) * (p4.y - p1.y)) / det;  // 计算参数t1
+  const double t2 = ((p2.x - p1.x) * (p4.y - p1.y) - (p2.y - p1.y) * (p4.x - p1.x)) / det;  // 计算参数t2
 
-  // check collision is outside the segment line
+  // 检查交点是否在两条线段上
   if (t1 < 0.0 || 1.0 < t1 || t2 < 0.0 || 1.0 < t2) {
     return std::nullopt;
   }
 
-  return p1 * (1.0 - t1) + p2 * t1;
+  return p1 * (1.0 - t1) + p2 * t1; // 返回交点
 }
 
+// 查找路径中偏移量对应的线段
 std::optional<PathIndexWithOffset> findOffsetSegment(
   const autoware_internal_planning_msgs::msg::PathWithLaneId & path, const size_t index,
   const double offset)
 {
   if (offset >= 0) {
+    // 如果偏移量为正，向前查找
     return findForwardOffsetSegment(path, index, offset);
   }
 
+  // 如果偏移量为负，向后查找
   return findBackwardOffsetSegment(path, index, -offset);
 }
 
+// 创建目标点
 std::optional<PathIndexWithPose> createTargetPoint(
   const autoware_internal_planning_msgs::msg::PathWithLaneId & path, const LineString2d & stop_line,
   const double margin, const double vehicle_offset)
 {
-  // Find collision segment
+  // 查找碰撞线段
   const auto collision_segment = findCollisionSegment(path, stop_line);
   if (!collision_segment) {
-    // No collision
+    // 如果没有碰撞线段，返回空
     return {};
   }
 
-  // Calculate offset length from stop line
-  // Use '-' to make the positive direction is forward
+  // 计算从停止线到目标点的偏移量
+  // 使用负号使正方向为向前
   const double offset_length = -(margin + vehicle_offset);
 
-  // Find offset segment
+  // 查找偏移线段
   const auto offset_segment = findOffsetSegment(path, *collision_segment, offset_length);
   if (!offset_segment) {
-    // No enough path length
+    // 如果路径长度不足，返回空
     return {};
   }
 
-  const auto target_pose = calcTargetPose(path, *offset_segment);
+  const auto target_pose = calcTargetPose(path, *offset_segment); // 计算目标姿态
 
-  const auto front_idx = offset_segment->first;
-  return std::make_pair(front_idx, target_pose);
+  const auto front_idx = offset_segment->first; // 获取前一个索引
+  return std::make_pair(front_idx, target_pose);  // 返回目标点
 }
 }  // namespace autoware::behavior_velocity_planner::arc_lane_utils

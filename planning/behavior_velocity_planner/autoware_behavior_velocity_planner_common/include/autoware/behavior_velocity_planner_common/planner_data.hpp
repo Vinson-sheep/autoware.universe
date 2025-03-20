@@ -47,33 +47,44 @@ struct PlannerData
 
   rclcpp::Clock::SharedPtr clock_;
 
-  geometry_msgs::msg::PoseStamped::ConstSharedPtr current_odometry;
-  geometry_msgs::msg::TwistStamped::ConstSharedPtr current_velocity;
-  geometry_msgs::msg::AccelWithCovarianceStamped::ConstSharedPtr current_acceleration;
+  // 车辆状态数据
+  geometry_msgs::msg::PoseStamped::ConstSharedPtr current_odometry; // 当前位姿
+  geometry_msgs::msg::TwistStamped::ConstSharedPtr current_velocity;  // 当前速度
+  geometry_msgs::msg::AccelWithCovarianceStamped::ConstSharedPtr current_acceleration;  // 当前加速度
+
+  
   static constexpr double velocity_buffer_time_sec = 10.0;
   std::deque<geometry_msgs::msg::TwistStamped> velocity_buffer;
+
+  // 感知数据
   autoware_perception_msgs::msg::PredictedObjects::ConstSharedPtr predicted_objects;
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr no_ground_pointcloud;
-
   nav_msgs::msg::OccupancyGrid::ConstSharedPtr occupancy_grid;
 
   double ego_nearest_dist_threshold;
   double ego_nearest_yaw_threshold;
 
-  std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_raw_;
-  std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_last_observed_;
-  std::optional<tier4_planning_msgs::msg::VelocityLimit> external_velocity_limit;
+  // 交通信号数据
+  std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_raw_;  // 原始交通信号
+  std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_last_observed_;  // 最后观察到的信号
+
+  // 速度限制
+  std::optional<tier4_planning_msgs::msg::VelocityLimit> external_velocity_limit; // 外部速度限制
 
   bool is_simulation = false;
 
-  std::shared_ptr<autoware::velocity_smoother::SmootherBase> velocity_smoother_;
-  std::shared_ptr<autoware::route_handler::RouteHandler> route_handler_;
-  autoware::vehicle_info_utils::VehicleInfo vehicle_info_;
+  // 路由和平滑器
+  std::shared_ptr<autoware::velocity_smoother::SmootherBase> velocity_smoother_;  // 速度平滑器
+  std::shared_ptr<autoware::route_handler::RouteHandler> route_handler_;  // 路由处理器
 
-  double max_stop_acceleration_threshold;
-  double max_stop_jerk_threshold;
-  double system_delay;
-  double delay_response_time;
+  // 车辆信息
+  autoware::vehicle_info_utils::VehicleInfo vehicle_info_;  // 车辆信息
+
+  // 规划参数
+  double max_stop_acceleration_threshold; // 最大停车加速度阈值
+  double max_stop_jerk_threshold; // 最大停车加加速度阈值
+  double system_delay;  // 系统延迟
+  double delay_response_time; // 响应延迟时间
   double stop_line_extend_length;
 
   bool isVehicleStopped(const double stop_duration = 0.0) const;

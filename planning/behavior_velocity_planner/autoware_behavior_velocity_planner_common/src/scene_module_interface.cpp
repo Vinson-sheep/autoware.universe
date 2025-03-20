@@ -24,15 +24,16 @@
 namespace autoware::behavior_velocity_planner
 {
 
+// 场景模块接口的构造函数
 SceneModuleInterface::SceneModuleInterface(
   const int64_t module_id, rclcpp::Logger logger, rclcpp::Clock::SharedPtr clock,
   const std::shared_ptr<autoware_utils::TimeKeeper> time_keeper,
   const std::shared_ptr<planning_factor_interface::PlanningFactorInterface>
     planning_factor_interface)
-: module_id_(module_id),
-  logger_(logger),
-  clock_(clock),
-  time_keeper_(time_keeper),
+: module_id_(module_id),  // 模块ID
+  logger_(logger),  // 日志记录器
+  clock_(clock),  // 时钟
+  time_keeper_(time_keeper),  // 时间记录器
   planning_factor_interface_(planning_factor_interface)
 {
 }

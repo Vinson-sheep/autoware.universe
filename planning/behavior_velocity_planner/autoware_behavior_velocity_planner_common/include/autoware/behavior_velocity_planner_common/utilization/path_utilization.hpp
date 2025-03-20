@@ -20,6 +20,7 @@
 #include <autoware_internal_planning_msgs/msg/path_with_lane_id.hpp>
 #include <autoware_planning_msgs/msg/path.hpp>
 
+// 这些函数主要用于自动驾驶路径规划中，通过对路径进行插值和过滤，优化路径的平滑性和可行性。
 namespace autoware::behavior_velocity_planner
 {
 bool splineInterpolate(

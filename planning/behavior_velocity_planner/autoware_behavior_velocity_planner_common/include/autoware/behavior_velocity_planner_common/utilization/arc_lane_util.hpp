@@ -26,6 +26,8 @@
 #define EIGEN_MPL2_ONLY
 #include <Eigen/Core>
 
+// 主要用于自动驾驶中的路径规划和碰撞检测，通过计算点之间的距离、线段的交点以及路径中的偏移线段，来确定目标点的位置。
+
 namespace autoware::behavior_velocity_planner
 {
 
