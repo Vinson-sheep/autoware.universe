@@ -23,6 +23,7 @@
 namespace autoware::motion_velocity_planner
 {
 
+// 构造函数，初始化插件加载器
 MotionVelocityPlannerManager::MotionVelocityPlannerManager()
 : plugin_loader_(
     "autoware_motion_velocity_planner_node_universe",
@@ -30,6 +31,7 @@ MotionVelocityPlannerManager::MotionVelocityPlannerManager()
 {
 }
 
+// 加载指定名称的模块插件
 void MotionVelocityPlannerManager::load_module_plugin(rclcpp::Node & node, const std::string & name)
 {
   // Check if the plugin is already loaded.
@@ -49,6 +51,7 @@ void MotionVelocityPlannerManager::load_module_plugin(rclcpp::Node & node, const
   }
 }
 
+// 卸载指定名称的模块插件
 void MotionVelocityPlannerManager::unload_module_plugin(
   rclcpp::Node & node, const std::string & name)
 {
@@ -66,12 +69,14 @@ void MotionVelocityPlannerManager::unload_module_plugin(
   }
 }
 
+// 更新所有已加载插件的参数
 void MotionVelocityPlannerManager::update_module_parameters(
   const std::vector<rclcpp::Parameter> & parameters)
 {
   for (auto & plugin : loaded_plugins_) plugin->update_parameters(parameters);
 }
 
+// 创建决策指标
 std::shared_ptr<Metric> MotionVelocityPlannerManager::make_decision_metric(
   const std::string & module_name, const std::string & reason)
 {
@@ -81,6 +86,7 @@ std::shared_ptr<Metric> MotionVelocityPlannerManager::make_decision_metric(
   return metric;
 }
 
+// 获取当前所有指标
 std::shared_ptr<MetricArray> MotionVelocityPlannerManager::get_metrics(
   const rclcpp::Time & current_time) const
 {
@@ -93,23 +99,34 @@ std::shared_ptr<MetricArray> MotionVelocityPlannerManager::get_metrics(
   return metrics;
 }
 
+// 规划速度
 std::vector<VelocityPlanningResult> MotionVelocityPlannerManager::plan_velocities(
   const std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & raw_trajectory_points,
   const std::vector<autoware_planning_msgs::msg::TrajectoryPoint> & smoothed_trajectory_points,
   const std::shared_ptr<const PlannerData> planner_data)
 {
   std::vector<VelocityPlanningResult> results;
+
+  // 遍历所有插件
   for (auto & plugin : loaded_plugins_) {
+
+    // 获取单个插件结果
     VelocityPlanningResult res =
       plugin->plan(raw_trajectory_points, smoothed_trajectory_points, planner_data);
+
+    // 插入结果
     results.push_back(res);
 
+    // 发布规划因子
     plugin->publish_planning_factor();
 
+    // 如果需要停车，插入停车指标
     if (res.stop_points.size() > 0) {
       const auto stop_decision_metric = make_decision_metric(plugin->get_module_name(), "stop");
       metrics_.push_back(stop_decision_metric);
     }
+
+    // 如果需要减速，插入减速指标
     if (res.slowdown_intervals.size() > 0) {
       const auto slow_down_decision_metric =
         make_decision_metric(plugin->get_module_name(), "slow_down");
