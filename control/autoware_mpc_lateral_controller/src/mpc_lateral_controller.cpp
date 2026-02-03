@@ -246,12 +246,14 @@ void MpcLateralController::setupDiag()
   diag_updater_->add("MPC_solve_checker", [&](auto & stat) { setStatus(stat); });
 }
 
+// 核心函数
 trajectory_follower::LateralOutput MpcLateralController::run(
   trajectory_follower::InputData const & input_data)
 {
-  // set input data
+  // 设置轨迹和里程计数据
   setTrajectory(input_data.current_trajectory, input_data.current_odometry);
 
+  // 对实际前轮转角进行修正？
   m_current_kinematic_state = input_data.current_odometry;
   m_current_steering = input_data.current_steering;
   if (enable_auto_steering_offset_removal_) {
@@ -385,19 +387,20 @@ void MpcLateralController::setTrajectory(
 {
   m_current_trajectory = msg;
 
+  // 校验轨迹
   if (msg.points.size() < 3) {
     RCLCPP_DEBUG(logger_, "received path size is < 3, not enough.");
     return;
   }
-
   if (!isValidTrajectory(msg)) {
     RCLCPP_ERROR(logger_, "Trajectory is invalid!! stop computing.");
     return;
   }
 
+  // 设置轨迹
   m_mpc->setReferenceTrajectory(msg, m_trajectory_filtering_param, current_kinematics);
 
-  // update trajectory buffer to check the trajectory shape change.
+  // 清除不连续的历史轨迹
   m_trajectory_buffer.push_back(m_current_trajectory);
   while (rclcpp::ok()) {
     const auto time_diff = rclcpp::Time(m_trajectory_buffer.back().header.stamp) -
@@ -679,6 +682,7 @@ bool MpcLateralController::isTrajectoryShapeChanged() const
   return false;
 }
 
+// 判断轨迹是否有不合理的字段
 bool MpcLateralController::isValidTrajectory(const Trajectory & traj) const
 {
   for (const auto & p : traj.points) {
