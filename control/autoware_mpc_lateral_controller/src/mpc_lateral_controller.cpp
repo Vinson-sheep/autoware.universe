@@ -253,7 +253,7 @@ trajectory_follower::LateralOutput MpcLateralController::run(
   // 设置轨迹和里程计数据
   setTrajectory(input_data.current_trajectory, input_data.current_odometry);
 
-  // 对实际前轮转角进行修正？
+  // 修正前轮转角估计？
   m_current_kinematic_state = input_data.current_odometry;
   m_current_steering = input_data.current_steering;
   if (enable_auto_steering_offset_removal_) {
@@ -264,20 +264,24 @@ trajectory_follower::LateralOutput MpcLateralController::run(
   Trajectory predicted_traj;
   Float32MultiArrayStamped debug_values;
 
+  // 判断是否处于自动驾驶
   const bool is_under_control = input_data.current_operation_mode.is_autoware_control_enabled &&
                                 input_data.current_operation_mode.mode ==
                                   autoware_adapi_v1_msgs::msg::OperationModeState::AUTONOMOUS;
 
+  // 如果之前不处于自动驾驶，初始化上一次控制量
   if (!m_is_ctrl_cmd_prev_initialized || !is_under_control) {
     m_ctrl_cmd_prev = getInitialControlCommand();
     m_is_ctrl_cmd_prev_initialized = true;
   }
 
+  // 计算横向控制量（核心）
   trajectory_follower::LateralHorizon ctrl_cmd_horizon{};
   const auto mpc_solved_status = m_mpc->calculateMPC(
     m_current_steering, m_current_kinematic_state, ctrl_cmd, predicted_traj, debug_values,
     ctrl_cmd_horizon);
 
+  // 如果计算失败，直接报错
   if (
     (m_mpc_solved_status.result == true && mpc_solved_status.result == false) ||
     (!mpc_solved_status.result && mpc_solved_status.reason != m_mpc_solved_status.reason)) {
@@ -292,12 +296,15 @@ trajectory_follower::LateralOutput MpcLateralController::run(
   // the vehicle will return to the path by re-planning the trajectory or external operation.
   // After the recovery, the previous value of the optimization may deviate greatly from
   // the actual steer angle, and it may make the optimization result unstable.
+
+  // 如果计算失败，重置MPC
   if (!mpc_solved_status.result || !is_under_control) {
     m_mpc->resetPrevResult(m_current_steering);
   } else {
     setSteeringToHistory(ctrl_cmd);
   }
 
+  // 修正输出？
   if (enable_auto_steering_offset_removal_) {
     steering_offset_->updateOffset(
       m_current_kinematic_state.twist.twist,
@@ -305,6 +312,7 @@ trajectory_follower::LateralOutput MpcLateralController::run(
     ctrl_cmd.steering_tire_angle += steering_offset_->getOffset();
   }
 
+  // 发布预测轨迹
   publishPredictedTraj(predicted_traj);
   publishDebugValues(debug_values);
 
@@ -326,21 +334,29 @@ trajectory_follower::LateralOutput MpcLateralController::run(
     return output;
   };
 
+  // 注意：如果有异常或者停止，都倾向于维持前轮转角不动
+  // 而不是直接归零
+
+  // 如果车辆已经停止
   if (isStoppedState()) {
-    // Reset input buffer
+    // 重置缓冲区为上一次的输出
     for (auto & value : m_mpc->m_input_buffer) {
       value = m_ctrl_cmd_prev.steering_tire_angle;
     }
-    // Use previous command value as previous raw steer command
+    // 返回上一次的输出做为这次的输出
     m_mpc->m_raw_steer_cmd_prev = m_ctrl_cmd_prev.steering_tire_angle;
     return createLateralOutput(m_ctrl_cmd_prev, false, ctrl_cmd_horizon);
   }
 
+  // 如果mpc求解失败，返回之前的输出
   if (!mpc_solved_status.result) {
     ctrl_cmd = getStopControlCommand();
   }
 
+  // 记录当前控制量
   m_ctrl_cmd_prev = ctrl_cmd;
+
+  // 返回当前控制量作为输出
   return createLateralOutput(ctrl_cmd, mpc_solved_status.result, ctrl_cmd_horizon);
 }
 
@@ -433,15 +449,17 @@ Lateral MpcLateralController::getInitialControlCommand() const
   return cmd;
 }
 
+// 判断车辆是否已经停止
 bool MpcLateralController::isStoppedState() const
 {
+  // 存在轨迹且车辆速度低于阈值
   const double current_vel = m_current_kinematic_state.twist.twist.linear.x;
-  // If the nearest index is not found, return false
   if (
     m_current_trajectory.points.empty() || std::fabs(current_vel) > m_stop_state_entry_ego_speed) {
     return false;
   }
 
+  // 转向已收敛
   const auto latest_published_cmd = m_ctrl_cmd_prev;  // use prev_cmd as a latest published command
   if (m_keep_steer_control_until_converged && !isSteerConverged(latest_published_cmd)) {
     return false;  // not stopState: keep control
@@ -451,6 +469,8 @@ bool MpcLateralController::isStoppedState() const
   // for the stop state judgement. However, it has been removed since the steering
   // control was turned off when approaching/exceeding the stop line on a curve or
   // emergency stop situation and it caused large tracking error.
+
+  // 轨迹存在停止点
   const size_t nearest = autoware::motion_utils::findFirstNearestIndexWithSoftConstraints(
     m_current_trajectory.points, m_current_kinematic_state.pose.pose, m_ego_nearest_dist_threshold,
     m_ego_nearest_yaw_threshold);
