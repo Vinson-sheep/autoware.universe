@@ -47,7 +47,7 @@ MpcLateralController::MpcLateralController(
 
   m_mpc = std::make_unique<MPC>(node);
 
-  m_mpc->m_ctrl_period = node.get_parameter("ctrl_period").as_double();
+  m_mpc->m_ctrl_period = node.get_parameter("ctrl_period").as_double(); // dt
 
   auto & p_filt = m_trajectory_filtering_param;
   p_filt.enable_path_smoothing = dp_bool("enable_path_smoothing");
@@ -57,8 +57,8 @@ MpcLateralController::MpcLateralController(
   p_filt.traj_resample_dist = dp_double("traj_resample_dist");
   p_filt.extend_trajectory_for_end_yaw_control = dp_bool("extend_trajectory_for_end_yaw_control");
 
-  m_mpc->m_use_steer_prediction = dp_bool("use_steer_prediction");
-  m_mpc->m_param.steer_tau = dp_double("vehicle_model_steer_tau");
+  m_mpc->m_use_steer_prediction = dp_bool("use_steer_prediction");  // ？？
+  m_mpc->m_param.steer_tau = dp_double("vehicle_model_steer_tau");  // 时间常数
 
   /* stop state parameters */
   m_stop_state_entry_ego_speed = dp_double("stop_state_entry_ego_speed");
@@ -73,9 +73,9 @@ MpcLateralController::MpcLateralController(
   const auto vehicle_info = autoware::vehicle_info_utils::VehicleInfoUtils(node).getVehicleInfo();
   const double wheelbase = vehicle_info.wheel_base_m;
   constexpr double deg2rad = static_cast<double>(M_PI) / 180.0;
-  m_mpc->m_steer_lim = vehicle_info.max_steer_angle_rad;
+  m_mpc->m_steer_lim = vehicle_info.max_steer_angle_rad;  // 最大前轮转角
 
-  // steer rate limit depending on curvature
+  // 根据曲率约束最大前轮转角
   const auto steer_rate_lim_dps_list_by_curvature =
     node.declare_parameter<std::vector<double>>("steer_rate_lim_dps_list_by_curvature");
   const auto curvature_list_for_steer_rate_lim =
@@ -86,7 +86,7 @@ MpcLateralController::MpcLateralController(
       steer_rate_lim_dps_list_by_curvature.at(i) * deg2rad);
   }
 
-  // steer rate limit depending on velocity
+  // 根据速度约束最大前轮转角
   const auto steer_rate_lim_dps_list_by_velocity =
     node.declare_parameter<std::vector<double>>("steer_rate_lim_dps_list_by_velocity");
   const auto velocity_list_for_steer_rate_lim =
@@ -99,33 +99,33 @@ MpcLateralController::MpcLateralController(
   /* vehicle model setup */
   auto vehicle_model_ptr =
     createVehicleModel(wheelbase, m_mpc->m_steer_lim, m_mpc->m_param.steer_tau, node);
-  m_mpc->setVehicleModel(vehicle_model_ptr);
+  m_mpc->setVehicleModel(vehicle_model_ptr); // 设置模型
 
   /* QP solver setup */
   auto qpsolver_ptr = createQPSolverInterface(node);
-  m_mpc->setQPSolver(qpsolver_ptr);
+  m_mpc->setQPSolver(qpsolver_ptr); // 设置QP求解器
 
   /* delay compensation */
   {
     const double delay_tmp = dp_double("input_delay");
     const double delay_step = std::round(delay_tmp / m_mpc->m_ctrl_period);
-    m_mpc->m_param.input_delay = delay_step * m_mpc->m_ctrl_period;
-    m_mpc->m_input_buffer = std::deque<double>(static_cast<size_t>(delay_step), 0.0);
+    m_mpc->m_param.input_delay = delay_step * m_mpc->m_ctrl_period; // 延时周期
+    m_mpc->m_input_buffer = std::deque<double>(static_cast<size_t>(delay_step), 0.0); // 延时缓冲区
   }
 
   /* steering offset compensation */
   enable_auto_steering_offset_removal_ =
     dp_bool("steering_offset.enable_auto_steering_offset_removal");
-  steering_offset_ = createSteerOffsetEstimator(wheelbase, node);
+  steering_offset_ = createSteerOffsetEstimator(wheelbase, node); // 前轮转角修正器
 
   /* initialize low-pass filter */
   {
     const double steering_lpf_cutoff_hz = dp_double("steering_lpf_cutoff_hz");
     const double error_deriv_lpf_cutoff_hz = dp_double("error_deriv_lpf_cutoff_hz");
-    m_mpc->initializeLowPassFilters(steering_lpf_cutoff_hz, error_deriv_lpf_cutoff_hz);
+    m_mpc->initializeLowPassFilters(steering_lpf_cutoff_hz, error_deriv_lpf_cutoff_hz); // 低通滤波
   }
 
-  // ego nearest index search
+  // 最近点搜索参数
   const auto check_and_get_param = [&](const auto & param) {
     return node.has_parameter(param) ? node.get_parameter(param).as_double() : dp_double(param);
   };
@@ -134,10 +134,13 @@ MpcLateralController::MpcLateralController(
   m_mpc->ego_nearest_dist_threshold = m_ego_nearest_dist_threshold;
   m_mpc->ego_nearest_yaw_threshold = m_ego_nearest_yaw_threshold;
 
+  // 是否使用延时状态
   m_mpc->m_use_delayed_initial_state = dp_bool("use_delayed_initial_state");
 
+  // 是否发布debug轨迹
   m_mpc->m_publish_debug_trajectories = dp_bool("publish_debug_trajectories");
 
+  // 一些发布者
   m_pub_predicted_traj = node.create_publisher<Trajectory>("~/output/predicted_trajectory", 1);
   m_pub_debug_values =
     node.create_publisher<Float32MultiArrayStamped>("~/output/lateral_diagnostic", 1);
@@ -360,6 +363,7 @@ trajectory_follower::LateralOutput MpcLateralController::run(
   return createLateralOutput(ctrl_cmd, mpc_solved_status.result, ctrl_cmd_horizon);
 }
 
+// 判断前轮转角指令和实际前轮转角是否一致
 bool MpcLateralController::isSteerConverged(const Lateral & cmd) const
 {
   // wait for a while to propagate the trajectory shape to the output command when the trajectory

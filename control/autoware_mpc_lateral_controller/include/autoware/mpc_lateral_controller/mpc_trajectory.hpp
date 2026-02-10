@@ -38,8 +38,8 @@ public:
   double z;
   double yaw;
   double vx;
-  double k;
-  double smooth_k;
+  double k; // 初始曲率
+  double smooth_k;  // 曲率
   double relative_time;
 };
 
@@ -96,6 +96,7 @@ public:
    */
   inline bool empty() const { return size() == 0; }
 
+  // 数据转换
   std::vector<geometry_msgs::msg::Point> toPoints() const
   {
     std::vector<geometry_msgs::msg::Point> points;
@@ -109,6 +110,7 @@ public:
     return points;
   }
 
+  // 数据转换
   std::vector<autoware_planning_msgs::msg::TrajectoryPoint> toTrajectoryPoints() const
   {
     std::vector<autoware_planning_msgs::msg::TrajectoryPoint> points;
