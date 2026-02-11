@@ -31,6 +31,7 @@ double SteeringPredictor::calcSteerPrediction()
   const double duration = (t_end - t_start).seconds();
   const double time_constant = m_steer_tau;
 
+  // 先进行衰减
   const double initial_response = std::exp(-duration / time_constant) * m_steer_prediction_prev;
 
   if (m_ctrl_cmd_vec.size() <= 2) {
@@ -38,6 +39,7 @@ double SteeringPredictor::calcSteerPrediction()
     return initial_response;
   }
 
+  // 再叠加控制量的影响
   const auto predicted_steering = initial_response + getSteerCmdSum(t_start, t_end, time_constant);
   setPrevResult(predicted_steering);
 
@@ -46,33 +48,37 @@ double SteeringPredictor::calcSteerPrediction()
 
 void SteeringPredictor::storeSteerCmd(const double steer)
 {
+  // 延迟0.3秒再生效
   const auto time_delayed = m_clock->now() + rclcpp::Duration::from_seconds(m_input_delay);
   Lateral cmd;
-  cmd.stamp = time_delayed;
-  cmd.steering_tire_angle = static_cast<float>(steer);
+  cmd.stamp = time_delayed; // 生效时间
+  cmd.steering_tire_angle = static_cast<float>(steer);  // 目标转角
 
-  // store published ctrl cmd
+  // 存储当前数据
   m_ctrl_cmd_vec.emplace_back(cmd);
 
   if (m_ctrl_cmd_vec.size() <= 2) {
     return;
   }
 
-  // remove unused ctrl cmd
+  // 移除历史数据
   constexpr double store_time = 0.3;
   if ((time_delayed - m_ctrl_cmd_vec.at(1).stamp).seconds() > m_input_delay + store_time) {
     m_ctrl_cmd_vec.erase(m_ctrl_cmd_vec.begin());
   }
 }
 
+// 计算历史控制指令的累计前轮转角
 double SteeringPredictor::getSteerCmdSum(
   const rclcpp::Time & t_start, const rclcpp::Time & t_end, const double time_constant) const
 {
+
+  // 至少两个元素
   if (m_ctrl_cmd_vec.size() <= 2) {
     return 0.0;
   }
 
-  // Find first index of control command container
+  // 找到第一个时间戳大于等于t_start的控制指令
   size_t idx = 1;
   while (t_start > rclcpp::Time(m_ctrl_cmd_vec.at(idx).stamp)) {
     if ((idx + 1) >= m_ctrl_cmd_vec.size()) {
@@ -81,7 +87,7 @@ double SteeringPredictor::getSteerCmdSum(
     ++idx;
   }
 
-  // Compute steer command input response
+  // 累计所有新控制指令的影响
   double steer_sum = 0.0;
   auto t = t_start;
   while (t_end > rclcpp::Time(m_ctrl_cmd_vec.at(idx).stamp)) {
@@ -95,6 +101,7 @@ double SteeringPredictor::getSteerCmdSum(
     }
   }
 
+  // 处理最后一个控制指令
   const double duration = (t_end - t).seconds();
   steer_sum += (1 - std::exp(-duration / time_constant)) *
                static_cast<double>(m_ctrl_cmd_vec.at(idx - 1).steering_tire_angle);

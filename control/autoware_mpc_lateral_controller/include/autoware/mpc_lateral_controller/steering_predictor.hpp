@@ -26,6 +26,7 @@ namespace autoware::motion::control::mpc_lateral_controller
 {
 using autoware_control_msgs::msg::Lateral;
 
+// 开环的前轮转角估计器
 class SteeringPredictor
 {
 public:

@@ -37,8 +37,10 @@ using autoware_utils::rad2deg;
 
 MPC::MPC(rclcpp::Node & node)
 {
+  // mpc生成的预测轨迹
   m_debug_frenet_predicted_trajectory_pub = node.create_publisher<Trajectory>(
     "~/debug/predicted_trajectory_in_frenet_coordinate", rclcpp::QoS(1));
+  // mpc重采样轨迹？
   m_debug_resampled_reference_trajectory_pub =
     node.create_publisher<Trajectory>("~/debug/resampled_reference_trajectory", rclcpp::QoS(1));
 }
@@ -50,31 +52,32 @@ ResultWithReason MPC::calculateMPC(
 {
   // since the reference trajectory does not take into account the current velocity of the ego
   // vehicle, it needs to calculate the trajectory velocity considering the longitudinal dynamics.
+
+  // 对轨迹进行滤波？
   const auto reference_trajectory =
     applyVelocityDynamicsFilter(m_reference_trajectory, current_kinematics);
 
-  // get the necessary data
+  // 将数据打包
   const auto [get_data_result, mpc_data] =
     getData(reference_trajectory, current_steer, current_kinematics);
   if (!get_data_result.result) {
     return ResultWithReason{false, fmt::format("getting MPC Data ({}).", get_data_result.reason)};
   }
 
-  // calculate initial state of the error dynamics
+  // 计算横纵向误差
   const auto x0 = getInitialState(mpc_data);
 
-  // apply time delay compensation to the initial state
+  // 修正初始状态
   const auto [success_delay, x0_delayed] =
     updateStateForDelayCompensation(reference_trajectory, mpc_data.nearest_time, x0);
   if (!success_delay) {
     return ResultWithReason{false, "delay compensation."};
   }
 
-  // resample reference trajectory with mpc sampling time
+  // 对mpc轨迹进行重采样
   const double mpc_start_time = mpc_data.nearest_time + m_param.input_delay;
   const double prediction_dt =
     getPredictionDeltaTime(mpc_start_time, reference_trajectory, current_kinematics);
-
   const auto [resample_result, mpc_resampled_ref_trajectory] =
     resampleMPCTrajectoryByTime(mpc_start_time, prediction_dt, reference_trajectory);
   if (!resample_result.result) {
@@ -82,10 +85,11 @@ ResultWithReason MPC::calculateMPC(
       false, fmt::format("trajectory resampling ({}).", resample_result.reason)};
   }
 
+  // 生成矩阵？
   // generate mpc matrix : predict equation Xec = Aex * x0 + Bex * Uex + Wex
   const auto mpc_matrix = generateMPCMatrix(mpc_resampled_ref_trajectory, prediction_dt);
 
-  // solve Optimization problem
+  // 求解mpc问题
   const auto [opt_result, Uex] = executeOptimization(
     mpc_matrix, x0_delayed, prediction_dt, mpc_resampled_ref_trajectory,
     current_kinematics.twist.twist.linear.x);
@@ -93,19 +97,21 @@ ResultWithReason MPC::calculateMPC(
     return ResultWithReason{false, fmt::format("optimization failure ({}).", opt_result.reason)};
   }
 
-  // apply filters for the input limitation and low pass filter
+  // 对输出进行限制
   const double u_saturated = std::clamp(Uex(0), -m_steer_lim, m_steer_lim);
+
+  // 对输出进行滤波？
   const double u_filtered = m_lpf_steering_cmd.filter(u_saturated);
 
-  // set control command
+  // 设置输出
   ctrl_cmd.steering_tire_angle = static_cast<float>(u_filtered);
   ctrl_cmd.steering_tire_rotation_rate = static_cast<float>(calcDesiredSteeringRate(
     mpc_matrix, x0_delayed, Uex, u_filtered, current_steer.steering_tire_angle, prediction_dt));
 
-  // save the control command for the steering prediction
+  // 更新预测数据
   m_steering_predictor->storeSteerCmd(u_filtered);
 
-  // save input to buffer for delay compensation
+  // 更新延迟缓冲区
   m_input_buffer.push_back(ctrl_cmd.steering_tire_angle);
   m_input_buffer.pop_front();
 
@@ -113,12 +119,12 @@ ResultWithReason MPC::calculateMPC(
   m_raw_steer_cmd_pprev = m_raw_steer_cmd_prev;
   m_raw_steer_cmd_prev = Uex(0);
 
-  /* calculate predicted trajectory */
+  // 计算预测轨迹
   Eigen::VectorXd initial_state = m_use_delayed_initial_state ? x0_delayed : x0;
   predicted_trajectory = calculatePredictedTrajectory(
     mpc_matrix, initial_state, Uex, mpc_resampled_ref_trajectory, prediction_dt, "world");
 
-  // Publish predicted trajectories in different coordinates for debugging purposes
+  // 发布预测轨迹
   if (m_publish_debug_trajectories) {
     // Calculate and publish predicted trajectory in Frenet coordinate
     auto predicted_trajectory_frenet = calculatePredictedTrajectory(
@@ -128,11 +134,11 @@ ResultWithReason MPC::calculateMPC(
     m_debug_frenet_predicted_trajectory_pub->publish(predicted_trajectory_frenet);
   }
 
-  // prepare diagnostic message
+  // 诊断信息
   diagnostic =
     generateDiagData(reference_trajectory, mpc_data, mpc_matrix, ctrl_cmd, Uex, current_kinematics);
 
-  // create LateralHorizon command
+  // 返回横向控制信息
   ctrl_cmd_horizon.time_step_ms = prediction_dt * 1000.0;
   ctrl_cmd_horizon.controls.clear();
   ctrl_cmd_horizon.controls.push_back(ctrl_cmd);
@@ -196,20 +202,25 @@ Float32MultiArrayStamped MPC::generateDiagData(
   return diagnostic;
 }
 
+// 对参考轨迹进行插值/平滑等操作
 void MPC::setReferenceTrajectory(
   const Trajectory & trajectory_msg, const TrajectoryFilteringParam & param,
   const Odometry & current_kinematics)
 {
+  // 寻找最近的离散点索引
   const size_t nearest_seg_idx =
     autoware::motion_utils::findFirstNearestSegmentIndexWithSoftConstraints(
       trajectory_msg.points, current_kinematics.pose.pose, ego_nearest_dist_threshold,
       ego_nearest_yaw_threshold);
+
+  // 计算纵向误差
   const double ego_offset_to_segment = autoware::motion_utils::calcLongitudinalOffsetToSegment(
     trajectory_msg.points, nearest_seg_idx, current_kinematics.pose.pose.position);
 
+  // 数据转换
   const auto mpc_traj_raw = MPCUtils::convertToMPCTrajectory(trajectory_msg);
 
-  // resampling
+  // 对轨迹重新插值
   const auto [success_resample, mpc_traj_resampled] = MPCUtils::resampleMPCTrajectoryByDistance(
     mpc_traj_raw, param.traj_resample_dist, nearest_seg_idx, ego_offset_to_segment);
   if (!success_resample) {
@@ -217,13 +228,12 @@ void MPC::setReferenceTrajectory(
     return;
   }
 
+  // 判断前后档 （如果无法判断，则维持上一次的档位）
   const auto is_forward_shift =
     autoware::motion_utils::isDrivingForward(mpc_traj_resampled.toTrajectoryPoints());
-
-  // if driving direction is unknown, use previous value
   m_is_forward_shift = is_forward_shift ? is_forward_shift.value() : m_is_forward_shift;
 
-  // path smoothing
+  // 使用插值后的轨迹
   MPCTrajectory mpc_traj_smoothed = mpc_traj_resampled;  // smooth filtered trajectory
   const int mpc_traj_resampled_size = static_cast<int>(mpc_traj_resampled.size());
   if (
@@ -246,23 +256,25 @@ void MPC::setReferenceTrajectory(
    * attitude angle well, resulting in improved control performance. If the trajectory is
    * well-defined considering the end point attitude angle, this feature is not necessary.
    */
+
+  // 对轨迹末端进行外推
   if (param.extend_trajectory_for_end_yaw_control) {
     MPCUtils::extendTrajectoryInYawDirection(
       mpc_traj_raw.yaw.back(), param.traj_resample_dist, m_is_forward_shift, mpc_traj_smoothed);
   }
 
-  // calculate yaw angle
+  // 计算偏航角
   MPCUtils::calcTrajectoryYawFromXY(mpc_traj_smoothed, m_is_forward_shift);
   MPCUtils::convertEulerAngleToMonotonic(mpc_traj_smoothed.yaw);
 
-  // calculate curvature
+  // 计算曲率
   MPCUtils::calcTrajectoryCurvature(
     param.curvature_smoothing_num_traj, param.curvature_smoothing_num_ref_steer, mpc_traj_smoothed);
 
-  // stop velocity at a terminal point
+  // 末端速度为零？
   mpc_traj_smoothed.vx.back() = 0.0;
 
-  // add a extra point on back with extended time to make the mpc stable.
+  // 末端增加一个无穷时间的停止点
   auto last_point = mpc_traj_smoothed.back();
   last_point.relative_time += 100.0;  // extra time to prevent mpc calc failure due to short time
   last_point.vx = 0.0;                // stop velocity at a terminal point
@@ -276,6 +288,7 @@ void MPC::setReferenceTrajectory(
   m_reference_trajectory = mpc_traj_smoothed;
 }
 
+// 貌似没调用
 void MPC::resetPrevResult(const SteeringReport & current_steer)
 {
   // Consider limit. The prev value larger than limitation breaks the optimization constraint and
@@ -285,12 +298,14 @@ void MPC::resetPrevResult(const SteeringReport & current_steer)
   m_raw_steer_cmd_pprev = std::clamp(current_steer.steering_tire_angle, -steer_lim_f, steer_lim_f);
 }
 
+// 获取mpc所需的数据
 std::pair<ResultWithReason, MPCData> MPC::getData(
   const MPCTrajectory & traj, const SteeringReport & current_steer,
   const Odometry & current_kinematics)
 {
   const auto current_pose = current_kinematics.pose.pose;
 
+  // 计算轨迹上的最近点
   MPCData data;
   if (!MPCUtils::calcNearestPoseInterp(
         traj, current_pose, &(data.nearest_pose), &(data.nearest_idx), &(data.nearest_time),
@@ -298,16 +313,16 @@ std::pair<ResultWithReason, MPCData> MPC::getData(
     return {ResultWithReason{false, "error in calculating nearest pose"}, MPCData{}};
   }
 
-  // get data
+  // 前轮转角/横向误差/航向误差
   data.steer = static_cast<double>(current_steer.steering_tire_angle);
   data.lateral_err = MPCUtils::calcLateralError(current_pose, data.nearest_pose);
   data.yaw_err = normalize_radian(
     tf2::getYaw(current_pose.orientation) - tf2::getYaw(data.nearest_pose.orientation));
 
-  // get predicted steer
+  // 计算预测转角（核心）
   data.predicted_steer = m_steering_predictor->calcSteerPrediction();
 
-  // check trajectory time length
+  // 如果轨迹时间不足，则报错
   const double max_prediction_time =
     m_param.min_prediction_length / static_cast<double>(m_param.prediction_horizon - 1);
   auto end_time = data.nearest_time + m_param.input_delay + m_ctrl_period + max_prediction_time;
@@ -317,6 +332,7 @@ std::pair<ResultWithReason, MPCData> MPC::getData(
   return {ResultWithReason{true}, data};
 }
 
+// 对mpc轨迹进行重采样
 std::pair<ResultWithReason, MPCTrajectory> MPC::resampleMPCTrajectoryByTime(
   const double ts, const double prediction_dt, const MPCTrajectory & input) const
 {
@@ -338,12 +354,14 @@ std::pair<ResultWithReason, MPCTrajectory> MPC::resampleMPCTrajectoryByTime(
   return {ResultWithReason{true}, output};
 }
 
+// 计算横纵向误差
 VectorXd MPC::getInitialState(const MPCData & data)
 {
   const int DIM_X = m_vehicle_model_ptr->getDimX();
   VectorXd x0 = VectorXd::Zero(DIM_X);
 
   const auto & lat_err = data.lateral_err;
+  // 使用预测转角，或者直接使用外部转角
   const auto & steer = m_use_steer_prediction ? data.predicted_steer : data.steer;
   const auto & yaw_err = data.yaw_err;
 
@@ -407,6 +425,7 @@ std::pair<bool, VectorXd> MPC::updateStateForDelayCompensation(
   return {true, x_curr};
 }
 
+// 对轨迹进行滤波？
 MPCTrajectory MPC::applyVelocityDynamicsFilter(
   const MPCTrajectory & input, const Odometry & current_kinematics) const
 {
@@ -585,6 +604,8 @@ std::pair<ResultWithReason, VectorXd> MPC::executeOptimization(
   const MatrixXd QCB = m.Qex * CB;
   // MatrixXd H = CB.transpose() * QCB + m.R1ex + m.R2ex; // This calculation is heavy. looking for
   // a good way.  //NOLINT
+
+  // 构造相关矩阵
   MatrixXd H = MatrixXd::Zero(DIM_U_N, DIM_U_N);
   H.triangularView<Eigen::Upper>() = CB.transpose() * QCB;
   H.triangularView<Eigen::Upper>() += m.R1ex + m.R2ex;
@@ -597,17 +618,18 @@ std::pair<ResultWithReason, VectorXd> MPC::executeOptimization(
     A(i, i - 1) = -1.0;
   }
 
-  // steering angle limit
+  // 限制最大转角
   VectorXd lb = VectorXd::Constant(DIM_U_N, -m_steer_lim);  // min steering angle
   VectorXd ub = VectorXd::Constant(DIM_U_N, m_steer_lim);   // max steering angle
 
-  // steering angle rate limit
+  // 限制最大转角速度
   VectorXd steer_rate_limits = calcSteerRateLimitOnTrajectory(traj, current_velocity);
   VectorXd ubA = steer_rate_limits * prediction_dt;
   VectorXd lbA = -steer_rate_limits * prediction_dt;
   ubA(0) = m_raw_steer_cmd_prev + steer_rate_limits(0) * m_ctrl_period;
   lbA(0) = m_raw_steer_cmd_prev - steer_rate_limits(0) * m_ctrl_period;
 
+  // 求解问题
   auto t_start = std::chrono::system_clock::now();
   bool solve_result = m_qpsolver_ptr->solve(H, f.transpose(), A, lb, ub, lbA, ubA, Uex);
   auto t_end = std::chrono::system_clock::now();
