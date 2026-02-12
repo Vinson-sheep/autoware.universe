@@ -80,6 +80,7 @@ double calcLateralError(const Pose & ego_pose, const Pose & ref_pose)
   return lat_err;
 }
 
+// 计算轨迹弧长序列
 void calcMPCTrajectoryArcLength(const MPCTrajectory & trajectory, std::vector<double> & arc_length)
 {
   double dist = 0.0;
@@ -91,6 +92,7 @@ void calcMPCTrajectoryArcLength(const MPCTrajectory & trajectory, std::vector<do
   }
 }
 
+// 计算轨迹总弧长
 double calcMPCTrajectoryArcLength(const MPCTrajectory & trajectory)
 {
   double length = 0.0;
@@ -109,6 +111,8 @@ std::pair<bool, MPCTrajectory> resampleMPCTrajectoryByDistance(
   if (input.empty()) {
     return {true, output};
   }
+
+  // 计算弧长序列
   std::vector<double> input_arclength;
   calcMPCTrajectoryArcLength(input, input_arclength);
 
@@ -116,6 +120,7 @@ std::pair<bool, MPCTrajectory> resampleMPCTrajectoryByDistance(
     return {false, output};
   }
 
+  // 对前后进行精细采样
   std::vector<double> output_arclength;
   // To accurately sample the ego point, resample separately in the forward direction and the
   // backward direction from the current position.
@@ -133,13 +138,13 @@ std::pair<bool, MPCTrajectory> resampleMPCTrajectoryByDistance(
   }
 
   std::vector<double> input_yaw = input.yaw;
-  convertEulerAngleToMonotonic(input_yaw);
+  convertEulerAngleToMonotonic(input_yaw);  // 确保插值结果连续，不会出现180度的突变
 
   const auto lerp_arc_length = [&](const auto & input_value) {
-    return autoware::interpolation::lerp(input_arclength, input_value, output_arclength);
+    return autoware::interpolation::lerp(input_arclength, input_value, output_arclength); // 线性插值
   };
   const auto spline_arc_length = [&](const auto & input_value) {
-    return autoware::interpolation::spline(input_arclength, input_value, output_arclength);
+    return autoware::interpolation::spline(input_arclength, input_value, output_arclength); // 样条插值
   };
 
   output.x = spline_arc_length(input.x);
@@ -258,6 +263,7 @@ std::vector<double> calcTrajectoryCurvature(
   return curvature_vec;
 }
 
+// 数据转换
 MPCTrajectory convertToMPCTrajectory(const Trajectory & input)
 {
   MPCTrajectory output;
@@ -445,6 +451,7 @@ double calcStopDistance(const Trajectory & current_trajectory, const int origin)
   return stop_dist;
 }
 
+// 对末端轨迹进行延长
 void extendTrajectoryInYawDirection(
   const double yaw, const double interval, const bool is_forward_shift, MPCTrajectory & traj)
 {

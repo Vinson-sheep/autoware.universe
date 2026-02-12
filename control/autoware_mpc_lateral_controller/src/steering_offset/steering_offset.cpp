@@ -32,12 +32,13 @@ SteeringOffsetEstimator::SteeringOffsetEstimator(
 void SteeringOffsetEstimator::updateOffset(
   const geometry_msgs::msg::Twist & twist, const double steering)
 {
+  // 车速足够高且转向角足够小
   const bool update_offset =
     (std::abs(twist.linear.x) > update_vel_threshold_ &&
      std::abs(steering) < update_steer_threshold_);
-
   if (!update_offset) return;
 
+  // 计算理论前轮转角
   const auto steer_angvel = std::atan2(twist.angular.z * wheelbase_, twist.linear.x);
   const auto steer_offset = steering - steer_angvel;
   steering_offset_storage_.push_back(steer_offset);
@@ -45,6 +46,7 @@ void SteeringOffsetEstimator::updateOffset(
     steering_offset_storage_.pop_front();
   }
 
+  // 计算均值
   steering_offset_ =
     std::accumulate(std::begin(steering_offset_storage_), std::end(steering_offset_storage_), 0.0) /
     std::size(steering_offset_storage_);
