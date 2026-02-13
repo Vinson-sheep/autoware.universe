@@ -58,12 +58,16 @@ bool isValidTrajectory(const Trajectory & traj)
   return true;
 }
 
+// 从轨迹上获取停止距离，或者轨迹剩余距离
 double calcStopDistance(
   const Pose & current_pose, const Trajectory & traj, const double max_dist, const double max_yaw)
 {
+  // 搜索轨迹上的零速度点
   const auto stop_idx_opt = autoware::motion_utils::searchZeroVelocityIndex(traj.points);
 
+  // 如果不存在，则为最后一个点
   const size_t end_idx = stop_idx_opt ? *stop_idx_opt : traj.points.size() - 1;
+  // 找到这个点，并计算剩余距离
   const size_t seg_idx = autoware::motion_utils::findFirstNearestSegmentIndexWithSoftConstraints(
     traj.points, current_pose, max_dist, max_yaw);
   const double signed_length_on_traj = autoware::motion_utils::calcSignedArcLength(
@@ -86,10 +90,11 @@ double getPitchByPose(const Quaternion & quaternion_msg)
   return pitch;
 }
 
+// 根据轨迹上的两个点计算车辆的俯仰角 （轨迹带高度）
 double getPitchByTraj(
   const Trajectory & trajectory, const size_t start_idx, const double wheel_base)
 {
-  // cannot calculate pitch
+  // 轨迹点数量不足时，无法计算俯仰角，返回0
   if (trajectory.points.size() <= 1) {
     return 0.0;
   }
@@ -103,11 +108,12 @@ double getPitchByTraj(
         return std::make_pair(start_idx, i);
       }
     }
-    // NOTE: The ego pose is close to the goal.
+    // 如果找不到距离大于轴距的点，返回最后两个点
     return std::make_pair(
       std::min(start_idx, trajectory.points.size() - 2), trajectory.points.size() - 1);
   }();
 
+  // 计算俯仰角
   return autoware_utils::calc_elevation_angle(
     trajectory.points.at(prev_idx).pose.position, trajectory.points.at(next_idx).pose.position);
 }

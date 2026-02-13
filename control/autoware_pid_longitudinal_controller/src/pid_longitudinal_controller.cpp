@@ -224,26 +224,30 @@ PidLongitudinalController::PidLongitudinalController(
   m_set_param_res = node.add_on_set_parameters_callback(
     std::bind(&PidLongitudinalController::paramCallback, this, _1));
 
-  // diagnostic
-  setupDiagnosticUpdater();
+  // // diagnostic
+  // setupDiagnosticUpdater();
 }
 
+// 设置里程计信息
 void PidLongitudinalController::setKinematicState(const nav_msgs::msg::Odometry & msg)
 {
   m_current_kinematic_state = msg;
 }
 
+// 设置加速度信息
 void PidLongitudinalController::setCurrentAcceleration(
   const geometry_msgs::msg::AccelWithCovarianceStamped & msg)
 {
   m_current_accel = msg;
 }
 
+// 设置操作模式
 void PidLongitudinalController::setCurrentOperationMode(const OperationModeState & msg)
 {
   m_current_operation_mode = msg;
 }
 
+// 设置当前轨迹
 void PidLongitudinalController::setTrajectory(const autoware_planning_msgs::msg::Trajectory & msg)
 {
   if (!longitudinal_utils::isValidTrajectory(msg)) {
@@ -259,6 +263,7 @@ void PidLongitudinalController::setTrajectory(const autoware_planning_msgs::msg:
   m_trajectory = msg;
 }
 
+// 动态加载参数
 rcl_interfaces::msg::SetParametersResult PidLongitudinalController::paramCallback(
   const std::vector<rclcpp::Parameter> & parameters)
 {
@@ -400,30 +405,29 @@ rcl_interfaces::msg::SetParametersResult PidLongitudinalController::paramCallbac
   return result;
 }
 
+// 不用管
 bool PidLongitudinalController::isReady(
   [[maybe_unused]] const trajectory_follower::InputData & input_data)
 {
   return true;
 }
 
+// 核心函数
 trajectory_follower::LongitudinalOutput PidLongitudinalController::run(
   trajectory_follower::InputData const & input_data)
 {
-  // set input data
+  // 加载数据
   setTrajectory(input_data.current_trajectory);
   setKinematicState(input_data.current_odometry);
   setCurrentAcceleration(input_data.current_accel);
   setCurrentOperationMode(input_data.current_operation_mode);
 
-  // calculate current pose and control data
+  // 打包数据
   geometry_msgs::msg::Pose current_pose = m_current_kinematic_state.pose.pose;
-
   const auto control_data = getControlData(current_pose);
-
-  // update control state
   updateControlState(control_data);
 
-  // calculate control command
+  // 计算控制量
   const Motion ctrl_cmd = calcCtrlCmd(control_data);
 
   // create control command
@@ -444,24 +448,25 @@ trajectory_follower::LongitudinalOutput PidLongitudinalController::run(
   return output;
 }
 
+// 提取控制数据
 PidLongitudinalController::ControlData PidLongitudinalController::getControlData(
   const geometry_msgs::msg::Pose & current_pose)
 {
   ControlData control_data{};
 
-  // dt
+  // 控制时间
   control_data.dt = getDt();
 
-  // current velocity and acceleration
+  // 当前速度和加速度
   control_data.current_motion.vel = m_current_kinematic_state.twist.twist.linear.x;
   control_data.current_motion.acc = m_current_accel.accel.accel.linear.x;
   control_data.interpolated_traj = m_trajectory;
 
-  // calculate the interpolated point and segment
+  // 对轨迹进行插值
   const auto current_interpolated_pose =
     calcInterpolatedTrajPointAndSegment(control_data.interpolated_traj, current_pose);
 
-  // Insert the interpolated point
+  // ？？？？
   control_data.interpolated_traj.points.insert(
     control_data.interpolated_traj.points.begin() + current_interpolated_pose.second + 1,
     current_interpolated_pose.first);
@@ -470,12 +475,11 @@ PidLongitudinalController::ControlData PidLongitudinalController::getControlData
   const auto nearest_point = current_interpolated_pose.first;
   auto target_point = current_interpolated_pose.first;
 
-  // Delay compensation - Calculate the distance we got, predicted velocity and predicted
-  // acceleration after delay
+  // 计算预测速度/加速度和距离（核心）
   control_data.state_after_delay =
     predictedStateAfterDelay(control_data.current_motion, m_delay_compensation_time);
 
-  // calculate the target motion for delay compensation
+  // 根据预测的运行距离在轨迹上找到对应的目标点
   constexpr double min_running_dist = 0.01;
   if (control_data.state_after_delay.running_distance > min_running_dist) {
     control_data.interpolated_traj.points =
@@ -492,14 +496,7 @@ PidLongitudinalController::ControlData PidLongitudinalController::getControlData
     target_point = target_interpolated_point.first;
   }
 
-  // ==========================================================================================
-  // NOTE: due to removeOverlapPoints(), the obtained control_data.target_idx and
-  // control_data.nearest_idx may become invalid if the number of points decreased.
-  // current API does not provide the way to check duplication beforehand and this function
-  // does not tell how many/which index points were removed, so there is no way
-  // to tell if our `control_data.target_idx` point still exists or removed.
-  // ==========================================================================================
-  // Remove overlapped points after inserting the interpolated points
+  // 似乎是重新构造轨迹
   control_data.interpolated_traj.points =
     autoware::motion_utils::removeOverlapPoints(control_data.interpolated_traj.points);
   control_data.nearest_idx = autoware::motion_utils::findFirstNearestIndexWithSoftConstraints(
@@ -509,32 +506,33 @@ PidLongitudinalController::ControlData PidLongitudinalController::getControlData
     control_data.interpolated_traj.points, target_point.pose, m_ego_nearest_dist_threshold,
     m_ego_nearest_yaw_threshold);
 
-  // send debug values
+  // 设置debug信息
   m_debug_values.setValues(DebugValues::TYPE::PREDICTED_VEL, control_data.state_after_delay.vel);
   m_debug_values.setValues(
     DebugValues::TYPE::TARGET_VEL,
     control_data.interpolated_traj.points.at(control_data.target_idx).longitudinal_velocity_mps);
 
-  // shift
+  // 如果前后档切换，则重置PID控制器
   control_data.shift = getCurrentShift(control_data);
   if (control_data.shift != m_prev_shift) {
     m_pid_vel.reset();
   }
   m_prev_shift = control_data.shift;
 
-  // distance to stopline
+  // 计算停止距离
   control_data.stop_dist = longitudinal_utils::calcStopDistance(
     current_pose, control_data.interpolated_traj, m_ego_nearest_dist_threshold,
     m_ego_nearest_yaw_threshold);
 
-  // pitch
-  // NOTE: getPitchByTraj() calculates the pitch angle as defined in
-  // ../media/slope_definition.drawio.svg while getPitchByPose() is not, so `raw_pitch` is reversed
+  // 估算实际俯仰角
   const double raw_pitch = (-1.0) * longitudinal_utils::getPitchByPose(current_pose.orientation);
   m_lpf_pitch->filter(raw_pitch);
+
+  // 估算轨迹俯仰角
   const double traj_pitch = longitudinal_utils::getPitchByTraj(
     control_data.interpolated_traj, control_data.target_idx, m_wheel_base);
 
+  // 按需选择俯仰角
   if (m_slope_source == SlopeSource::RAW_PITCH) {
     control_data.slope_angle = m_lpf_pitch->getValue();
   } else if (m_slope_source == SlopeSource::TRAJECTORY_PITCH) {
@@ -569,29 +567,35 @@ PidLongitudinalController::ControlData PidLongitudinalController::getControlData
     control_data.slope_angle = m_lpf_pitch->getValue();
   }
 
-  updatePitchDebugValues(control_data.slope_angle, traj_pitch, raw_pitch, m_lpf_pitch->getValue());
+  // // 更新debug信息
+  // updatePitchDebugValues(control_data.slope_angle, traj_pitch, raw_pitch, m_lpf_pitch->getValue());
 
   return control_data;
 }
 
+// 在紧急状态下生成一个安全的控制命令（速度和加速度），使车辆能够平稳停止或保持安全状态。
 PidLongitudinalController::Motion PidLongitudinalController::calcEmergencyCtrlCmd(const double dt)
 {
-  // These accelerations are without slope compensation
+  // 初始化
   const auto & p = m_emergency_state_params;
   Motion raw_ctrl_cmd{p.vel, p.acc};
 
+  // 限制速度的变化率不超过紧急状态允许的加速度
   raw_ctrl_cmd.vel =
     longitudinal_utils::applyDiffLimitFilter(raw_ctrl_cmd.vel, m_prev_raw_ctrl_cmd.vel, dt, p.acc);
+
+  // 加速度变化率限制（冲击度限制）
   raw_ctrl_cmd.acc = std::clamp(raw_ctrl_cmd.acc, m_min_acc, m_max_acc);
-  m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_ACC_LIMITED, raw_ctrl_cmd.acc);
   raw_ctrl_cmd.acc =
     longitudinal_utils::applyDiffLimitFilter(raw_ctrl_cmd.acc, m_prev_raw_ctrl_cmd.acc, dt, p.jerk);
-  m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_JERK_LIMITED, raw_ctrl_cmd.acc);
 
-  const auto virtual_wall_marker = autoware::motion_utils::createStopVirtualWallMarker(
-    m_current_kinematic_state.pose.pose, "velocity control\n (emergency)", clock_->now(), 0,
-    m_wheel_base + m_front_overhang);
-  m_pub_virtual_wall_marker->publish(virtual_wall_marker);
+  // m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_ACC_LIMITED, raw_ctrl_cmd.acc);
+  // m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_JERK_LIMITED, raw_ctrl_cmd.acc);
+
+  // const auto virtual_wall_marker = autoware::motion_utils::createStopVirtualWallMarker(
+  //   m_current_kinematic_state.pose.pose, "velocity control\n (emergency)", clock_->now(), 0,
+  //   m_wheel_base + m_front_overhang);
+  // m_pub_virtual_wall_marker->publish(virtual_wall_marker);
 
   return raw_ctrl_cmd;
 }
@@ -796,21 +800,24 @@ void PidLongitudinalController::updateControlState(const ControlData & control_d
   return;
 }
 
+// 计算控制量（核心）
 PidLongitudinalController::Motion PidLongitudinalController::calcCtrlCmd(
   const ControlData & control_data)
 {
   const size_t target_idx = control_data.target_idx;
 
-  // velocity and acceleration command
+  // 初始化控制量为轨迹控制量
   Motion ctrl_cmd_as_pedal_pos{
     control_data.interpolated_traj.points.at(target_idx).longitudinal_velocity_mps,
     control_data.interpolated_traj.points.at(target_idx).acceleration_mps2};
 
+  // 如果当前状态为已停止
   if (m_control_state == ControlState::STOPPED) {
     const auto & p = m_stopped_state_params;
     ctrl_cmd_as_pedal_pos.vel = p.vel;
     ctrl_cmd_as_pedal_pos.acc = p.acc;
 
+    // 直接幅值0
     m_prev_raw_ctrl_cmd.vel = 0.0;
     m_prev_raw_ctrl_cmd.acc = 0.0;
 
@@ -818,31 +825,43 @@ PidLongitudinalController::Motion PidLongitudinalController::calcCtrlCmd(
     m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_JERK_LIMITED, ctrl_cmd_as_pedal_pos.acc);
     m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_SLOPE_APPLIED, ctrl_cmd_as_pedal_pos.acc);
 
-    RCLCPP_DEBUG(
-      logger_, "[Stopped]. vel: %3.3f, acc: %3.3f", ctrl_cmd_as_pedal_pos.vel,
-      ctrl_cmd_as_pedal_pos.acc);
-  } else {
+    // RCLCPP_DEBUG(
+    //   logger_, "[Stopped]. vel: %3.3f, acc: %3.3f", ctrl_cmd_as_pedal_pos.vel,
+    //   ctrl_cmd_as_pedal_pos.acc);
+  } 
+  // 否则
+  else {
+
+    // 初始化为目标位置的控制量（多余代码）
     Motion raw_ctrl_cmd{
       control_data.interpolated_traj.points.at(target_idx).longitudinal_velocity_mps,
       control_data.interpolated_traj.points.at(target_idx).acceleration_mps2};
+
+    // 如果是紧急情况
     if (m_control_state == ControlState::EMERGENCY) {
       raw_ctrl_cmd = calcEmergencyCtrlCmd(control_data.dt);
-    } else {
+    } 
+    // 如果是驾驶模式
+    else {
       if (m_control_state == ControlState::DRIVE) {
+
+        // 直接使用目标速度
         raw_ctrl_cmd.vel = control_data.interpolated_traj.points.at(control_data.target_idx)
                              .longitudinal_velocity_mps;
         raw_ctrl_cmd.acc = applyVelocityFeedback(control_data);
         raw_ctrl_cmd = keepBrakeBeforeStop(control_data, raw_ctrl_cmd, target_idx);
 
-        RCLCPP_DEBUG(
-          logger_,
-          "[feedback control]  vel: %3.3f, acc: %3.3f, dt: %3.3f, v_curr: %3.3f, v_ref: %3.3f "
-          "feedback_ctrl_cmd.ac: %3.3f",
-          raw_ctrl_cmd.vel, raw_ctrl_cmd.acc, control_data.dt, control_data.current_motion.vel,
-          control_data.interpolated_traj.points.at(control_data.target_idx)
-            .longitudinal_velocity_mps,
-          raw_ctrl_cmd.acc);
-      } else if (m_control_state == ControlState::STOPPING) {
+        // RCLCPP_DEBUG(
+        //   logger_,
+        //   "[feedback control]  vel: %3.3f, acc: %3.3f, dt: %3.3f, v_curr: %3.3f, v_ref: %3.3f "
+        //   "feedback_ctrl_cmd.ac: %3.3f",
+        //   raw_ctrl_cmd.vel, raw_ctrl_cmd.acc, control_data.dt, control_data.current_motion.vel,
+        //   control_data.interpolated_traj.points.at(control_data.target_idx)
+        //     .longitudinal_velocity_mps,
+        //   raw_ctrl_cmd.acc);
+      } 
+      // 如果是停止中
+      else if (m_control_state == ControlState::STOPPING) {
         raw_ctrl_cmd.acc = m_smooth_stop.calculate(
           control_data.stop_dist, control_data.current_motion.vel, control_data.current_motion.acc,
           m_vel_hist, m_delay_compensation_time, m_debug_values);
@@ -864,21 +883,21 @@ PidLongitudinalController::Motion PidLongitudinalController::calcCtrlCmd(
 
     // calc acc feedback
     const double acc_err = control_data.current_motion.acc - raw_ctrl_cmd.acc;
-    m_debug_values.setValues(DebugValues::TYPE::ERROR_ACC, acc_err);
+    // m_debug_values.setValues(DebugValues::TYPE::ERROR_ACC, acc_err);
     m_lpf_acc_error->filter(acc_err);
-    m_debug_values.setValues(DebugValues::TYPE::ERROR_ACC_FILTERED, m_lpf_acc_error->getValue());
+    // m_debug_values.setValues(DebugValues::TYPE::ERROR_ACC_FILTERED, m_lpf_acc_error->getValue());
 
     const double acc_cmd = raw_ctrl_cmd.acc - m_lpf_acc_error->getValue() * m_acc_feedback_gain;
-    m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_ACC_FB_APPLIED, acc_cmd);
-    RCLCPP_DEBUG(
-      logger_,
-      "[acc feedback]: raw_ctrl_cmd.acc: %1.3f, control_data.current_motion.acc: %1.3f, acc_cmd: "
-      "%1.3f",
-      raw_ctrl_cmd.acc, control_data.current_motion.acc, acc_cmd);
+    // m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_ACC_FB_APPLIED, acc_cmd);
+    // RCLCPP_DEBUG(
+    //   logger_,
+    //   "[acc feedback]: raw_ctrl_cmd.acc: %1.3f, control_data.current_motion.acc: %1.3f, acc_cmd: "
+    //   "%1.3f",
+    //   raw_ctrl_cmd.acc, control_data.current_motion.acc, acc_cmd);
 
     ctrl_cmd_as_pedal_pos.acc =
       applySlopeCompensation(acc_cmd, control_data.slope_angle, control_data.shift);
-    m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_SLOPE_APPLIED, ctrl_cmd_as_pedal_pos.acc);
+    // m_debug_values.setValues(DebugValues::TYPE::ACC_CMD_SLOPE_APPLIED, ctrl_cmd_as_pedal_pos.acc);
     ctrl_cmd_as_pedal_pos.vel = raw_ctrl_cmd.vel;
   }
 
@@ -887,8 +906,8 @@ PidLongitudinalController::Motion PidLongitudinalController::calcCtrlCmd(
   ctrl_cmd_as_pedal_pos.acc = longitudinal_utils::applyDiffLimitFilter(
     ctrl_cmd_as_pedal_pos.acc, m_prev_ctrl_cmd.acc, control_data.dt, m_max_acc_cmd_diff);
 
-  // update debug visualization
-  updateDebugVelAcc(control_data);
+  // // update debug visualization
+  // updateDebugVelAcc(control_data);
 
   RCLCPP_DEBUG(
     logger_, "[final output]: acc: %3.3f, v_curr: %3.3f", ctrl_cmd_as_pedal_pos.acc,
@@ -978,8 +997,10 @@ enum PidLongitudinalController::Shift PidLongitudinalController::getCurrentShift
   return m_prev_shift;
 }
 
+// 存储控制量
 void PidLongitudinalController::storeAccelCmd(const double accel)
 {
+  // 仅在驾驶模型下存储
   if (m_control_state == ControlState::DRIVE) {
     // convert format
     autoware_control_msgs::msg::Longitudinal cmd;
@@ -993,7 +1014,7 @@ void PidLongitudinalController::storeAccelCmd(const double accel)
     m_ctrl_cmd_vec.clear();
   }
 
-  // remove unused ctrl cmd
+  // 移除超时控制量
   if (m_ctrl_cmd_vec.size() <= 2) {
     return;
   }
@@ -1050,6 +1071,7 @@ PidLongitudinalController::Motion PidLongitudinalController::keepBrakeBeforeStop
   return output_motion;
 }
 
+// 对轨迹进行线性插值
 std::pair<autoware_planning_msgs::msg::TrajectoryPoint, size_t>
 PidLongitudinalController::calcInterpolatedTrajPointAndSegment(
   const autoware_planning_msgs::msg::Trajectory & traj, const geometry_msgs::msg::Pose & pose) const
@@ -1058,11 +1080,12 @@ PidLongitudinalController::calcInterpolatedTrajPointAndSegment(
     return std::make_pair(traj.points.at(0), 0);
   }
 
-  // apply linear interpolation
+  // 线性插值
   return longitudinal_utils::lerpTrajectoryPoint(
     traj.points, pose, m_ego_nearest_dist_threshold, m_ego_nearest_yaw_threshold);
 }
 
+// 累积预测速度/加速度/距离
 PidLongitudinalController::StateAfterDelay PidLongitudinalController::predictedStateAfterDelay(
   const Motion current_motion, const double delay_compensation_time) const
 {
@@ -1072,14 +1095,17 @@ PidLongitudinalController::StateAfterDelay PidLongitudinalController::predictedS
   double pred_vel = current_vel;
   double pred_acc = current_acc;
 
+  // 如果没有控制量，或者不在自动驾驶模型
   if (m_ctrl_cmd_vec.empty() || m_current_operation_mode.mode != OperationModeState::AUTONOMOUS) {
-    // check time to stop
+    // 计算停止时间
     const double time_to_stop = -current_vel / current_acc;
+    // 计算预测时间
     const double delay_time_calculation =
       time_to_stop > 0.0 && time_to_stop < delay_compensation_time ? time_to_stop
                                                                    : delay_compensation_time;
-    // simple linear prediction
+    // 计算未来速度
     pred_vel = current_vel + current_acc * delay_time_calculation;
+    // 计算行驶距离
     running_distance = std::abs(
       delay_time_calculation * current_vel +
       0.5 * current_acc * delay_time_calculation * delay_time_calculation);
@@ -1089,7 +1115,7 @@ PidLongitudinalController::StateAfterDelay PidLongitudinalController::predictedS
 
   for (std::size_t i = 0; i < m_ctrl_cmd_vec.size(); ++i) {
     if ((clock_->now() - m_ctrl_cmd_vec.at(i).stamp).seconds() < delay_compensation_time) {
-      // add velocity to accel * dt
+      // 计算控制量持续时间
       const double time_to_next_acc =
         (i == m_ctrl_cmd_vec.size() - 1)
           ? std::min(
@@ -1099,12 +1125,15 @@ PidLongitudinalController::StateAfterDelay PidLongitudinalController::predictedS
                rclcpp::Time(m_ctrl_cmd_vec.at(i).stamp))
                 .seconds(),
               delay_compensation_time);
+      // 提取当前控制量
       const double acc = m_ctrl_cmd_vec.at(i).acceleration;
-      // because acc_cmd is positive when vehicle is running backward
+      // 更新速度
       pred_acc = std::copysignf(1.0, static_cast<float>(pred_vel)) * acc;
+      // 计算位移
       running_distance += std::abs(
         std::abs(pred_vel) * time_to_next_acc + 0.5 * acc * time_to_next_acc * time_to_next_acc);
       pred_vel += pred_vel < 0.0 ? (-acc * time_to_next_acc) : (acc * time_to_next_acc);
+      // 如果预测速度与初始速度符号相反，将速度设为0并终止循环
       if (pred_vel / current_vel < 0.0) {
         // sign of velocity is changed
         pred_vel = 0.0;
@@ -1170,46 +1199,46 @@ double PidLongitudinalController::applyVelocityFeedback(const ControlData & cont
   return feedback_acc;
 }
 
-void PidLongitudinalController::updatePitchDebugValues(
-  const double pitch_using, const double traj_pitch, const double localization_pitch,
-  const double localization_pitch_lpf)
-{
-  const double to_degrees = (180.0 / static_cast<double>(M_PI));
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_USING_RAD, pitch_using);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_USING_DEG, pitch_using * to_degrees);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_LPF_RAD, localization_pitch_lpf);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_LPF_DEG, localization_pitch_lpf * to_degrees);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_RAD, localization_pitch);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_DEG, localization_pitch * to_degrees);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_TRAJ_RAD, traj_pitch);
-  m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_TRAJ_DEG, traj_pitch * to_degrees);
-}
+// void PidLongitudinalController::updatePitchDebugValues(
+//   const double pitch_using, const double traj_pitch, const double localization_pitch,
+//   const double localization_pitch_lpf)
+// {
+//   const double to_degrees = (180.0 / static_cast<double>(M_PI));
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_USING_RAD, pitch_using);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_USING_DEG, pitch_using * to_degrees);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_LPF_RAD, localization_pitch_lpf);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_LPF_DEG, localization_pitch_lpf * to_degrees);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_RAD, localization_pitch);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_DEG, localization_pitch * to_degrees);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_TRAJ_RAD, traj_pitch);
+//   m_debug_values.setValues(DebugValues::TYPE::PITCH_RAW_TRAJ_DEG, traj_pitch * to_degrees);
+// }
 
-void PidLongitudinalController::updateDebugVelAcc(const ControlData & control_data)
-{
-  m_debug_values.setValues(DebugValues::TYPE::CURRENT_VEL, control_data.current_motion.vel);
-  m_debug_values.setValues(
-    DebugValues::TYPE::TARGET_VEL,
-    control_data.interpolated_traj.points.at(control_data.target_idx).longitudinal_velocity_mps);
-  m_debug_values.setValues(
-    DebugValues::TYPE::TARGET_ACC,
-    control_data.interpolated_traj.points.at(control_data.target_idx).acceleration_mps2);
-  m_debug_values.setValues(
-    DebugValues::TYPE::NEAREST_VEL,
-    control_data.interpolated_traj.points.at(control_data.nearest_idx).longitudinal_velocity_mps);
-  m_debug_values.setValues(
-    DebugValues::TYPE::NEAREST_ACC,
-    control_data.interpolated_traj.points.at(control_data.nearest_idx).acceleration_mps2);
-  m_debug_values.setValues(
-    DebugValues::TYPE::ERROR_VEL,
-    control_data.interpolated_traj.points.at(control_data.nearest_idx).longitudinal_velocity_mps -
-      control_data.current_motion.vel);
-}
+// void PidLongitudinalController::updateDebugVelAcc(const ControlData & control_data)
+// {
+//   m_debug_values.setValues(DebugValues::TYPE::CURRENT_VEL, control_data.current_motion.vel);
+//   m_debug_values.setValues(
+//     DebugValues::TYPE::TARGET_VEL,
+//     control_data.interpolated_traj.points.at(control_data.target_idx).longitudinal_velocity_mps);
+//   m_debug_values.setValues(
+//     DebugValues::TYPE::TARGET_ACC,
+//     control_data.interpolated_traj.points.at(control_data.target_idx).acceleration_mps2);
+//   m_debug_values.setValues(
+//     DebugValues::TYPE::NEAREST_VEL,
+//     control_data.interpolated_traj.points.at(control_data.nearest_idx).longitudinal_velocity_mps);
+//   m_debug_values.setValues(
+//     DebugValues::TYPE::NEAREST_ACC,
+//     control_data.interpolated_traj.points.at(control_data.nearest_idx).acceleration_mps2);
+//   m_debug_values.setValues(
+//     DebugValues::TYPE::ERROR_VEL,
+//     control_data.interpolated_traj.points.at(control_data.nearest_idx).longitudinal_velocity_mps -
+//       control_data.current_motion.vel);
+// }
 
-void PidLongitudinalController::setupDiagnosticUpdater()
-{
-  diag_updater_->add("control_state", this, &PidLongitudinalController::checkControlState);
-}
+// void PidLongitudinalController::setupDiagnosticUpdater()
+// {
+//   diag_updater_->add("control_state", this, &PidLongitudinalController::checkControlState);
+// }
 
 void PidLongitudinalController::checkControlState(
   diagnostic_updater::DiagnosticStatusWrapper & stat)
